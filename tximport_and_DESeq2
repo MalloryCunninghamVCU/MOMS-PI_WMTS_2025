@@ -1,0 +1,136 @@
+#####Transcript abundance with tximport and DESeq2 analysis
+
+library(tximport)
+library(DESeq2)
+library(org.Hs.eg.db)
+library(dplyr)
+library(tibble)
+library(AnnotationDbi)
+library(tximport) #version 1.34.0
+library(rtracklayer) #version 1.66.0
+library(readr)
+
+
+
+
+#####filter the input list of samples you want to include here######(i.e. only Black women)
+samples <- read.table(file.path("/your/path/to/salmon/indices", "one_sample_per_line_list_of_samples_to_keep.txt"), header =
+ FALSE)
+sample_ids <- samples$V1
+
+#####subset metadata for filtered input list
+meta <- read.csv("metadata.csv", header=TRUE)
+meta_filtered <- meta[meta$SampleID %in% sample_ids, ]
+
+#####Data wrangling for continuous variables flagged as needing scaling by DESeq2
+#"the design formula contains one or more numeric variables that have mean or standard deviation larger than 5"
+meta_filtered$ga_atSampling_weeks_scaled <- scale(meta_filtered$ga_atSampling_weeks)
+meta_filtered$age_scaled <- scale(meta_filtered$age)
+meta_filtered$systolic_scaled <- scale(meta_filtered$systolic)
+
+
+#####
+sub_dirs <- c(
+  list.files("/path/to/salmon_decoy_output", pattern = "common_file_string*", full.names = TRUE)
+,
+  list.files("/path/to/additional/directory/salmon_decoy_output", pattern = "common_file_string*", full.names = TRUE)
+)
+keep_samples <- meta_filtered$SampleID
+sub_dir_ids <- basename(sub_dirs)
+matching_sub_dirs <- sub_dirs[sub_dir_ids %in% keep_samples]
+files <- file.path(matching_sub_dirs, "quant.sf")
+names(files) <- basename(matching_sub_dirs)
+
+
+
+#####Generate tx2gene mapping
+library(rtracklayer)
+gtf_path <- "/path/to/salmon_index_w_decoy/Homo_sapiens.GRCh38.102.gtf.gz"
+gtf <- import(gtf_path)
+tx2gene <- unique(as.data.frame(mcols(gtf)[, c("transcript_id", "gene_id")]))
+tx2gene <- tx2gene[complete.cases(tx2gene), ]
+tx2gene$transcript_id <- sub("\\..*", "", tx2gene$transcript_id)
+tx2gene$gene_id <- sub("\\..*", "", tx2gene$gene_id)
+tx2gene$gene_id <- gsub("\\s", "", tx2gene$gene_id)             # Remove whitespace
+tx2gene$transcript_id <- gsub("\\s", "", tx2gene$transcript_id)
+tx2gene$transcript_id <- sub("\\..*", "", tx2gene$transcript_id)
+any(grepl("\\.", tx2gene$gene_id)) # Should be FALSE
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene, ignoreTxVersion = TRUE, txOut=FALSE)
+
+
+
+
+#####Make sure colnames in txi counts match metadata order
+meta_filtered <- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+all(colnames(txi$counts) == meta_filtered$SampleID)  # should be TRUE
+ncol(txi$counts)      # Number of samples in counts matrix
+nrow(meta_filtered)  # Number of metadata rows
+meta_filtered<- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+meta_filtered <- meta_filtered[!duplicated(meta_filtered$SampleID), ]
+rownames(meta_filtered) <- meta_filtered$SampleID
+all(colnames(txi$counts) == rownames(meta_filtered))  # should be TRUE
+ncol(txi$counts) == nrow(meta_filtered)               # should be TRUE
+
+
+txi$counts <- txi$counts[, !duplicated(colnames(txi$counts))]
+if (!is.null(txi$abundance)) txi$abundance <- txi$abundance[, !duplicated(colnames(txi$abundance))]
+if (!is.null(txi$length)) txi$length <- txi$length[, !duplicated(colnames(txi$length))]
+
+meta_filtered <- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+rownames(meta_filtered) <- meta_filtered$SampleID
+
+all(colnames(txi$counts) == rownames(meta_filtered))  # should be TRUE
+ncol(txi$counts) == nrow(meta_filtered)               # should be TRUE
+
+
+
+#####Build DESeq2 model from sample covariates
+dds <- DESeqDataSetFromTximport(txi, meta_filtered, ~ Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled + Race+ IncomeModified + vagitype)
+
+dds$age <- as.numeric(dds$age)
+dds$IncomeModified <- as.factor(dds$IncomeModified)
+dds$ga_atSampling_weeks <- as.numeric(dds$ga_atSampling_weeks)
+
+#####Set reference levels for categorical variables
+#dds$Birth_Status <- relevel(dds$Birth_Status, ref = "term")
+dds$Med_final <- relevel(dds$Med_final, ref = "No_medication")
+dds$Race <- relevel(dds$Race, ref = "Black")
+dds$vagitype <- relevel(dds$vagitype, ref = "Lactobacillus crispatus_cluster")
+
+
+
+#####Filter out low count genes
+keep <- rowSums(counts(dds) >= 10) >= 2  # Logical vector: TRUE if gene is kept
+dds <- dds[keep, ]
+sum(duplicated(rownames(dds)))           # Should now be 0
+
+
+#####Run DESeq2
+dds <- DESeq(dds)
+
+
+#####Identify and Remove Outlier Samples
+cooks_mat <- log10(assays(dds)[["cooks"]])
+cooks_max <- apply(cooks_mat, 2, max, na.rm = TRUE)
+Q1 <- quantile(cooks_max, 0.25, na.rm = TRUE)
+Q3 <- quantile(cooks_max, 0.75, na.rm = TRUE)
+IQR_value <- Q3 - Q1
+upper_threshold <- Q3 + 1.5 * IQR_value
+
+#####Get list of outlier samples based on Cook's distance interquartile range
+#DESeq2 Cook's distance https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+#####Drop levels of variables that don't have enough replicates to run
+outliers <- colnames(dds)[cooks_max > upper_threshold]
+dds_filtered <- dds[, !colnames(dds) %in% outliers]
+dds_filtered$Med_final <- droplevels(dds_filtered$Med_final)
+dds_filtered$Race <- droplevels(dds_filtered$Race)
+dds_filtered$vagitype <- droplevels(dds_filtered$vagitype) 
+
+#####Run DESeq2 again
+dds_filtered <- DESeq(dds_filtered)
+vsd <- vst(dds_filtered, blind=FALSE)
+
+saveRDS(vsd, file = "yourFile_vsd.rds")
+saveRDS(dds_filtered, file = "yourFile_dds.rds")
+
