@@ -8,7 +8,7 @@ Code used to process and analyze all vaginal metatranscriptomic, 16s rRNA vagina
 3. MultiQC(v1.17)
 4. Salmon(v1.10.1)
 5. R Studio(v4.4.0 or higher)
-   ....*attached base packages: stats4, stats, ,graphics, grDevices, utils, datasets, methods
+       * attached base packages: stats4, stats, ,graphics, grDevices, utils, datasets, methods
 
 8. other attached R packages and versions:
  [1] readr_2.1.5                 rtracklayer_1.66.0
