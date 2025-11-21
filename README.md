@@ -140,6 +140,39 @@ other attached packages:
 
 
 
-**qPCR statistical tests**
+**qPCR statistical tests**  
+
+attached base packages:
+[1] grid      stats4    stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+ [1] rstatix_0.7.2               FSA_0.10.0                  hrbrthemes_0.8.7            glmnet_4.1-10              
+ [5] Matrix_1.7-3                caret_7.0-1                 lattice_0.22-6              pROC_1.18.5                
+ [9] ROCR_1.0-11                 ggVennDiagram_1.5.4         FactoMineR_2.11             car_3.1-3                  
+[13] carData_3.0-5               variancePartition_1.38.0    DT_0.33                     fgsea_1.34.0               
+[17] clusterProfiler_4.16.0      Maaslin2_1.22.0             egg_0.4.5                   enrichplot_1.28.2          
+[21] magick_2.8.7                ggcorrplot_0.1.4.1          rcompanion_2.5.0            DescTools_0.99.60          
+[25] plotly_4.11.0               MASS_7.3-65                 sparseLDA_0.1-9             lubridate_1.9.4            
+[29] forcats_1.0.0               stringr_1.5.1               purrr_1.0.4                 readr_2.1.5                
+[33] tidyverse_2.0.0             ggrepel_0.9.6               gridExtra_2.3               reshape_0.8.10             
+[37] rnaseqGene_1.32.0           fission_1.28.0              RUVSeq_1.42.0               edgeR_4.6.2                
+[41] limma_3.64.1                EDASeq_2.42.0               ShortRead_1.66.0            GenomicAlignments_1.44.0   
+[45] Rsamtools_2.24.0            Biostrings_2.76.0           XVector_0.48.0              sva_3.56.0                 
+[49] BiocParallel_1.42.1         mgcv_1.9-3                  nlme_3.1-168                Gviz_1.52.0                
+[53] org.Hs.eg.db_3.21.0         AnnotationDbi_1.70.0        genefilter_1.90.0           ggbeeswarm_0.7.2           
+[57] glmpca_0.2.0                PoiClaClu_1.0.2.1           RColorBrewer_1.1-3          pheatmap_1.0.13            
+[61] hexbin_1.28.5               vsn_3.76.0                  apeglm_1.30.0               DESeq2_1.48.1              
+[65] magrittr_2.0.3              tximeta_1.26.1              airway_1.28.0               SummarizedExperiment_1.38.1
+[69] Biobase_2.68.0              GenomicRanges_1.60.0        GenomeInfoDb_1.44.0         IRanges_2.42.0             
+[73] S4Vectors_0.46.0            BiocGenerics_0.54.0         generics_0.1.4              MatrixGenerics_1.20.0      
+[77] matrixStats_1.5.0           BiocStyle_2.36.0            devEMF_4.5-1                Rtsne_0.17                 
+[81] GUniFrac_1.8                patchwork_1.3.1             tidyr_1.3.1                 tibble_3.3.0               
+[85] dplyr_1.1.4                 reshape2_1.4.4              ggplot2_3.5.2               vegan_2.7-1                
+[89] permute_0.9-8               phyloseq_1.52.0            
+
+
+
+
+
 
 **Cytokine Data Analysis Requirements**
