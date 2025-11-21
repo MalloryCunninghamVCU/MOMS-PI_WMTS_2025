@@ -38,7 +38,8 @@ Code used to process and analyze all vaginal metatranscriptomic, 16s rRNA vagina
 [6] utils     datasets  methods   base     
 
 other attached packages:
-+ [1] glmnet_4.1-10               Matrix_1.7-3               
+other attached packages:
+ [1] glmnet_4.1-10               Matrix_1.7-3               
  [3] caret_7.0-1                 lattice_0.22-6             
  [5] pROC_1.18.5                 ROCR_1.0-11                
  [7] ggVennDiagram_1.5.4         FactoMineR_2.11            
@@ -82,11 +83,3 @@ other attached packages:
 [83] reshape2_1.4.4              ggplot2_3.5.2              
 [85] vegan_2.7-1                 permute_0.9-8              
 [87] phyloseq_1.52.0            
-
-
-
-
-
-
-
-
