@@ -1,3 +1,498 @@
 #####Differential gene expression analysis between levels of vagitype factor of the model while correcting for other maternal covariates
 
 
+###load R packages
+library(devEMF)
+library(rnaseqGene)
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(pheatmap)
+library(PoiClaClu)
+library(RColorBrewer)
+library(glmpca)
+library(apeglm)
+library(fission)
+library(genefilter)
+library(sva)
+library(reshape)
+library(gridExtra)
+library(ggrepel)
+library(tidyverse)
+library(base)
+library(vegan)
+library(sparseLDA)
+library(MASS)
+library(plotly)
+library(tidyr)
+library(DescTools)
+library(patchwork)
+library(rcompanion)
+library(ggrepel)
+library(ggcorrplot)
+library(magick)
+library(enrichplot)
+library(egg)
+library(Maaslin2)
+library(vegan)
+library(clusterProfiler)
+library(fgsea)
+library(tibble)
+library(DT)
+library(variancePartition)
+library(car)
+library(FactoMineR)
+library(readr)
+library(stringr)
+library(ggVennDiagram)
+library(Rtsne)
+library(ROCR)
+library(pROC)
+library(caret)
+library(glmnet)
+library(org.Hs.eg.db)
+
+
+###load DESeq2 object
+dds <- readRDS("dds.rds")
+
+###Test for significant associations between covariates
+df = as.data.frame(colData(dds))
+
+by(df$age_scaled, df$Race, shapiro.test) #test for normality
+by(df$age, df$Race, shapiro.test) #test for normality
+kruskal.test(age_scaled ~ Race, data = df)
+kruskal.test(age ~ Race, data = df)
+pairwise.wilcox.test(df$age_scaled, df$Race, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(df$age, df$Race, p.adjust.method = "bonferroni")
+
+by(df$ga_atSampling_weeks_scaled, df$Race, shapiro.test)
+kruskal.test(df$ga_atSampling_weeks_scaled ~ Race, data = df)
+kruskal.test(df$ga_atSampling_weeks ~ Race, data = df)
+pairwise.wilcox.test(df$ga_atSampling_weeks_scaled, df$Race, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(df$ga_atSampling_weeks_scaled, df$Race, p.adjust.method = "bonferroni", alternative = "greater")
+pairwise.wilcox.test(df$ga_atSampling_weeks, df$Race, p.adjust.method = "bonferroni")
+
+by(df$ga_atSampling_weeks_scaled, df$vagitype, shapiro.test)
+by(df$ga_atSampling_weeks, df$vagitype, shapiro.test)
+kruskal.test(df$ga_atSampling_weeks_scaled ~ vagitype, data = df)
+kruskal.test(df$ga_atSampling_weeks ~ vagitype, data = df)
+pairwise.wilcox.test(df$ga_atSampling_weeks_scaled, df$vagitype, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(df$ga_atSampling_weeks_scaled, df$vagitype, p.adjust.method = "bonferroni", alternative = "greater")
+pairwise.wilcox.test(df$ga_atSampling_weeks, df$vagitype, p.adjust.method = "bonferroni")
+
+
+###Check for remaining outliers after DESeq2 object generation
+
+# Extract Cook's distances
+cooks_mat <- log10(assays(dds)[["cooks"]])  
+
+# Compute upper threshold using the 1.5× IQR rule
+cooks_max <- apply(cooks_mat, 2, max, na.rm = TRUE)  # Max Cook's per sample
+Q1 <- quantile(cooks_max, 0.25, na.rm = TRUE)  # First quartile (25th percentile)
+Q3 <- quantile(cooks_max, 0.75, na.rm = TRUE)  # Third quartile (75th percentile)
+IQR_value <- Q3 - Q1
+upper_threshold <- Q3 + 1.5 * IQR_value  # Define outlier threshold
+
+outlier_samples <- colnames(dds)[cooks_max > upper_threshold]
+outlier_samples
+
+
+
+###List pairwise contrasts for variable of interest 
+contrasts <- list(
+  "Non_Infectious_Medication_vs_No_medication" = list(factor = "Med_final", level1 = "Non_Infectious_Medication", level2 = "No_medication"),
+  "Med_final_Progesterone_vs_No_medication" = list(factor = "Med_final", level1 = "Progesterone", level2 = "No_medication"),
+  "White_vs_Black" = list(factor = "Race", level1 = "White", level2 = "Black"),
+  "Hispanic_or_Latino_vs_Black" = list(factor = "Race", level1 = "Hispanic_or_Latino", level2 = "Black"),
+  "Mixed_Race_vs_Black" = list(factor = "Race", level1 = "Mixed_Race", level2 = "Black"),
+  "IncomeModified_Under_15_000_vs_Over15000" = list(factor = "IncomeModified", level1 = "Over15000", level2 = "Under_15_000"),
+  "IncomeModified_Unknown_vs_Over15000" = list(factor = "IncomeModified", level1 = "Unknown", level2 = "Under_15_000"),
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Gardnerella vaginalis", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus gasseri_cluster", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus iners", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lachnocurva vaginae", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "No type", level2 = "Lactobacillus crispatus_cluster")
+)
+contrasts_vagitype <- list(
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Gardnerella vaginalis", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus gasseri_cluster", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus iners", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lachnocurva vaginae", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "No type", level2 = "Lactobacillus crispatus_cluster")
+)
+
+
+
+
+
+###Convert Ensembl IDs to gene names
+res <- results(dds)
+
+ens_ids <- gsub("\\..*", "", rownames(dds))
+gene_symbols <- mapIds(
+  org.Hs.eg.db,
+  keys = ens_ids,
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+###IDs without corresponding symbol remain Ensembl ID
+gene_symbols[is.na(gene_symbols)] <- ens_ids[is.na(gene_symbols)]
+names(gene_symbols) <- rownames(dds) # so you can index by rownames
+
+results_list <- list()
+sig_genes_list <- list()
+
+for (name in names(contrasts)) {
+  ct <- contrasts[[name]]
+  res_df <- as.data.frame(results(dds, contrast = c(ct$factor, ct$level1, ct$level2)))
+  ens <- gsub("\\..*", "", rownames(res_df))
+  # Map to symbols, fallback to ID
+  gene_out <- gene_symbols[rownames(res_df)]
+  # Add as a column if you want it in the results table
+  res_df$gene_name <- gene_out
+  results_list[[name]] <- res_df
+  # Significant genes: only gene_name (symbol or ID)
+  sig_mask <- which(res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 0 & res$baseMean > 10)
+  sig_genes <- unique(res_df$gene_name[sig_mask])
+  sig_genes_list[[name]] <- sig_genes
+}
+
+gene_symbols[is.na(gene_symbols)] <- ens_ids[is.na(gene_symbols)]
+names(gene_symbols) <- rownames(vsd)
+
+
+
+###View significant genes in each contrast
+set.seed(455)
+sig_summary <- map2_df(
+  results_list,
+  names(results_list),
+  ~{
+    res <- .x
+    contrast <- .y
+    # Significant genes: padj < 0.05 & abs(log2FC) > 0
+    sig_genes <- rownames(res[which(res$padj < 0.05 & abs(res$log2FoldChange) > 0 & res$baseMean >= 10), ])
+    if (length(sig_genes) == 0) return(NULL)
+    tibble(
+      Contrast = contrast,
+      Gene = sig_genes,
+      Direction = ifelse(res[sig_genes, "log2FoldChange"] > 0, "up", "down")
+    )
+  }
+)
+
+# Count number of significant up and down genes per contrast
+sig_counts <- sig_summary %>%
+  group_by(Contrast, Direction) %>%
+  summarise(n_genes = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Direction, values_from = n_genes, values_fill = 0)
+
+sig_counts
+
+
+###Heatmap of gene expression
+anno <- as.data.frame(colData(dds)[, c("Med_final","ga_atSampling_weeks","Race", "IncomeModified","Birth_Status", "vagitype")]) #variables to keep in heatmap
+rownames(anno) <- colnames(dds)
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 40) #select top 40 most variably expressed genes
+mat <- assay(vsd)[topVarGenes, ]
+mat <- mat - rowMeans(mat)
+rownames(mat) <- gene_symbols[rownames(mat)]
+mat_z <- t(scale(t(mat)))
+df <- as.data.frame(mat_z)
+
+#custom colors
+c25 <- c(
+  "Atopobium vaginae" = "#c49c94",
+  "Granulicatella adiacens"  = "azure1",
+  "Enterobacteriaceae cluster31" = "gray",
+  "Gardnerella vaginalis" = "#d62728",
+  "Lachnospiraceae BVAB1" = "#ff7f0e",
+  "Lachnocurva vaginae" = "#ff7f0e",
+  "Lactobacillus crispatus_cluster" = "#fff5aa",
+  "Lactobacillus gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus iners" = "#aec7e8",
+  "Lactobacillus jensenii" = "#ffbb78",
+  "Lactobacillus delbrueckii" = "lightpink",
+  "Mycoplasma hominis" = "#0ec434",
+  "No type" = "black",
+  "Prevotella cluster2" = "#17becf",
+  "Prevotella cluster 2" = "#17becf",
+  "Prevotella bivia" = "cornflowerblue",
+  "TM7 OTU-H1" = "mediumvioletred",
+  "Sneathia amnii" = "#9467bd",
+  "Sneathia sanguinegens" = "#9467bd",
+  "Staphylococcus cluster47" = "#9edae5",
+  "Streptococcus agalactiae" = "tan4",
+  "Streptococcus cluster29" = "cyan",
+  "Streptococcus cluster 29" = "cyan",
+  "Streptococcus cluster21" = "gray",
+  "Streptococcus salivarius_thermophilus_vestibularis" = "gray",
+  "NER" = "gray",
+  "NonLactobacillus" = "red",
+  "Lactobacillus" = "#fff5aa",
+  "Lactobacillus_iners" = "#aec7e8",
+  "LI_Above_med_Shannon" = "#aec7e8",
+  "LI_Below_med_Shannon" = "darkblue",
+  "Lactobacillus_Nonlactobacillus_split" = "magenta"
+  
+)
+
+
+set3_colors_race <- colorRampPalette(brewer.pal(8, "Set2"))(length(unique(anno$Race)))
+names(set3_colors_race) <- unique(anno$Race)
+set4_colors_birth <- c("preterm" = "red", "term" = "blue")
+size_factor_colors <- colorRampPalette(c("lightblue", "white", "orange"))(100)
+size_factor_colors_2 <- colorRampPalette(c("lightblue", "gray", "darkblue"))(50)
+set6_colors_med <- c("No_medication" = "honeydew3", "Non_Infectious_Medication" = "darkorchid", "Progesterone" = "deeppink4")
+set7_colors_income <- c("Over15000" = "purple", "Under_15_000" = "pink", "Unknown" = "gray")
+
+annotation_colors <- list(
+  vagitype = c25,
+  ga_atSampling_weeks = size_factor_colors_2,
+  Race = set3_colors_race,
+  Birth_Status = set4_colors_birth,
+  Med_final = set6_colors_med,
+  sizeFactor = size_factor_colors,
+  IncomeModified = set7_colors_income
+)
+
+#Clustered heatmap
+pheatmap(
+  mat,
+  annotation_col = anno,
+  annotation_colors = annotation_colors,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "correlation",
+  clustering_method = "ward.D2",
+  scale = "row",
+  color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+  cluster_cols = TRUE,
+  main = "Top Variable Genes Across All Samples",
+  labels_col = rep("", ncol(mat), ##remove sample labels
+  
+))
+
+ordered_samples <- order(anno$vagitype)
+mat_ordered <- mat[, ordered_samples]
+anno_ordered <- anno[ordered_samples, ]
+
+#Heatmap sorted by vagitype and unclustered
+full_heatmap = pheatmap(
+  mat_ordered,
+  annotation_col = anno_ordered,
+  annotation_colors = annotation_colors,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "correlation",
+  clustering_method = "ward.D2",
+  scale = "row", #scale to row sets middle as 0, z score
+  fontsize = 10,
+  color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+  cluster_cols = FALSE,
+  main = "Top Variable Genes Across All Samples",
+  labels_col = rep("", ncol(mat_ordered)) 
+)
+
+
+#####PCoA analysis
+factors_to_plot <- c("Med_final","systolic_scaled","age_scaled", "ga_atSampling_weeks_scaled", "Race", "IncomeModified", "vagitype") #variables of interest 
+pcaData <- plotPCA(vsd, intgroup = factors_to_plot, returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+pcaData$name <- rownames(pcaData)
+
+###PC1/PC2 ranges from all contrasts
+set.seed(567)
+all_pc1 <- c()
+all_pc2 <- c()
+for (name in names(contrasts)) {
+  ct <- contrasts[[name]]
+  sel_samples <- colnames(dds)[colData(dds)[[ct$factor]] %in% c(ct$level1, ct$level2)]
+  if (length(sel_samples) < 3) next
+  vsd_sub <- vsd[, sel_samples]
+  pcaData_sub <- plotPCA(vsd_sub, intgroup = ct$factor, returnData = TRUE)
+  all_pc1 <- c(all_pc1, pcaData_sub$PC1)
+  all_pc2 <- c(all_pc2, pcaData_sub$PC2)
+  
+  ellipse_data <- pcaData_sub %>%
+    group_by(!!sym(ct$factor)) %>%
+    do({
+      if (nrow(.) >= 3) {
+        gb <- ggplot_build(
+          ggplot(., aes_string(x = "PC1", y = "PC2", color = ct$factor)) +
+            stat_ellipse(type = "norm")
+        )
+        # Only return if the ellipse exists
+        if (length(gb$data) >= 2) gb$data[[2]] else tibble()
+      } else {
+        tibble() # return an empty tibble, NOT NULL
+      }
+    }) %>% ungroup()
+  
+  # Only add if there are x/y columns present
+  if ("x" %in% names(ellipse_data) && "y" %in% names(ellipse_data)) {
+    all_pc1 <- c(all_pc1, ellipse_data$x)
+    all_pc2 <- c(all_pc2, ellipse_data$y)
+  }
+}
+# Add 5% padding to avoid ellipses touching the edge
+xpad <- 0.01 * diff(range(all_pc1, na.rm = TRUE))
+ypad <- 0.01 * diff(range(all_pc2, na.rm = TRUE))
+xlim_contrast <- range(all_pc1, na.rm = TRUE) + c(-xpad, xpad)
+ylim_contrast <- range(all_pc2, na.rm = TRUE) + c(-ypad, ypad)
+
+#Build PCA plots with consistent axes
+pca_contrast_plot_list <- list()
+for (name in names(contrasts)) {
+  ct <- contrasts[[name]]
+  factor_col <- ct$factor
+  level1 <- ct$level1
+  level2 <- ct$level2
+  
+  sel_samples <- colnames(dds)[colData(dds)[[factor_col]] %in% c(level1, level2)]
+  if (length(sel_samples) < 3) next
+  
+  vsd_sub <- vsd[, sel_samples]
+  pcaData <- plotPCA(vsd_sub, intgroup = factor_col, returnData = TRUE)
+  percentVar <- round(100 * attr(pcaData, "percentVar"))
+  
+  p <- ggplot(pcaData, aes_string(x = "PC1", y = "PC2", color = factor_col)) +
+    geom_point(size = 5, alpha = 0.8) +
+    stat_ellipse(aes_string(group = factor_col, color = factor_col), type = "norm", linetype = 1, size = 1) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+    coord_cartesian(xlim = xlim_contrast, ylim = ylim_contrast) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      panel.border = element_rect(fill = NA, color = "black", size = 1, linetype = "solid"),
+      legend.background = element_rect(fill = "white", color = NA),
+      legend.key = element_rect(fill = "white", color = NA),
+      plot.title = element_text(size =30),
+      axis.title.x = element_text(size = 30),
+      axis.title.y = element_text(size = 30),
+      legend.title = element_text(size =20),
+      legend.text = element_text(size = 20),
+      axis.text.x = element_text(size = 30),
+      axis.text.y = element_text(size = 30),
+      legend.key.height = unit(0.5, "lines")
+    )
+  
+  
+  pca_contrast_plot_list[[name]] <- p
+}
+
+
+#####Adonis test for PCoA plot
+set.seed(123)  
+contrast_pvals <- c()
+contrast_names <- c()
+for (name in names(contrasts_vagitype)) {
+  ct <- contrasts_vagitype[[name]]
+  factor_col <- ct$factor
+  level1 <- ct$level1
+  level2 <- ct$level2
+  
+  sel_samples <- colnames(dds)[colData(dds)[[factor_col]] %in% c(level1, level2)]
+  if (length(sel_samples) < 3) next
+  
+  vsd_sub <- vsd[, sel_samples]
+  meta_sub <- as.data.frame(colData(vsd_sub))
+  dist_mat_sub <- dist(t(assay(vsd_sub)), method = "euclidean")
+  adonis_result <- adonis2(dist_mat_sub ~ get(factor_col), data = meta_sub)
+  cat("Adonis test for", name, "\n")
+  print(adonis_result)
+  contrast_pvals <- c(contrast_pvals, adonis_result$`Pr(>F)`[1])
+  contrast_names <- c(contrast_names, name)
+}
+
+# Adjust p-values for these subset tests
+contrast_adj_pvals <- p.adjust(contrast_pvals, method = "BH")
+result_table <- data.frame(Contrast = contrast_names,
+                           p.value = contrast_pvals,
+                           adj.p.value = contrast_adj_pvals)
+print(result_table)
+
+
+###################################################################
+set.seed(678)
+volcano_plot_list <- c()
+
+for (i in seq_along(results_list)) {
+  results_df <- results_list[[i]]
+  results_df$gene <- results_df$gene_name
+  
+  # ---- FILTER genes with baseMean > 5 ----
+  results_df <- results_df %>% filter(baseMean >= 10)
+  
+  # Add volcano plot categories
+  results_df$category <- "Not_Significant"
+  results_df$category[results_df$padj < 0.05 & results_df$log2FoldChange > 0] <- "Significant_Up"
+  results_df$category[results_df$padj < 0.05 & results_df$log2FoldChange < 0] <- "Significant_Down"
+  results_df$category <- factor(results_df$category, levels = c("Significant_Up", "Significant_Down", "Not_Significant"))
+  
+  # Identify top 20 up and down (among significant genes)
+  top_up <- results_df %>%
+    filter(category == "Significant_Up") %>%
+    arrange(desc(log2FoldChange)) %>%
+    slice_head(n = 20)
+  top_down <- results_df %>%
+    filter(category == "Significant_Down") %>%
+    arrange(log2FoldChange) %>%
+    slice_head(n = 20)
+  top_genes <- bind_rows(top_up, top_down)$gene
+  
+  # Only label top genes
+  results_df$label <- ifelse(results_df$gene %in% top_genes, results_df$gene, "")
+  # Find symmetric x-axis limits
+  max_abs_lfc <- max(abs(results_df$log2FoldChange), na.rm = TRUE)
+  xlim_symmetric <- c(-max_abs_lfc, max_abs_lfc)
+  min_padj <- min(results_df$padj[results_df$padj > 0], na.rm = TRUE)
+  top_y <- -log10(min_padj)
+  ylim_y <- c(0, top_y * 1.1)
+  
+  volcano_plot <- ggplot(results_df, aes(x = log2FoldChange, y = -log10(padj), color = category)) +
+    geom_point(alpha = 0.6, size = 3) +
+    geom_text_repel(
+      aes(label = label),
+      size = 5,
+      max.overlaps = Inf,
+      segment.size = 1
+    ) +
+    scale_color_manual(values = c("Significant_Up" = "red", "Significant_Down" = "blue", "Not_Significant" = "grey")) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+    labs(x = "Log2 Fold Change", y = "-log10(p-adj)", title = names(results_list)[i]) +
+    xlim(xlim_symmetric) +
+    ylim(ylim_y) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      panel.border = element_rect(fill = NA, color = "black", size = 1, linetype = "solid"),
+      legend.background = element_rect(fill = "white", color = NA),
+      legend.key = element_rect(fill = "white", color = NA),
+      plot.title = element_text(size = 30),
+      axis.title.x = element_text(size = 20),
+      axis.title.y = element_text(size = 20),
+      legend.title = element_text(size = 15),
+      legend.text = element_text(size = 15),
+      axis.text.x = element_text(size = 20),
+      axis.text.y = element_text(size = 20),
+      legend.key.height = unit(0.5, "lines")
+    )
+  volcano_plot_list[[names(results_list)[i]]] <- volcano_plot
+}
+
+print(volcano_plot_list)
+
+
+for (plot_name in names(volcano_plot_list)) {
+  ggsave(
+    filename = paste0(plot_name, ".svg"),
+    plot = volcano_plot_list[[plot_name]],
+    width = 1750,
+    height = 1000,
+    units = "mm",
+    limitsize = FALSE
+  )
+}
+
+
