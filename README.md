@@ -1,5 +1,5 @@
 # MOMS-PI_WMTS_2025
-Code used to process and analyze all metatranscriptomic data from the MOMS-PI project.
+Code used to process and analyze all metatranscriptomic, 16s rRNA vaginal microbiome profile, and vaginal swab cytokine data from the MOMS-PI project.
 
 **Requirements**
 Fastp(v0.23.4)
