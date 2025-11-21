@@ -1,1 +1,483 @@
 #####R code for using raw count tables from aligning vaginal microbiome 16s rRNA V1-V3 region reads to the STIRRUPS reference library for microbiome diversity analyses
+
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(patchwork)
+library(GUniFrac) 
+
+
+
+#####Upload files
+otu_table <- read.csv("reads_table.csv", row.names = 1)   # OTUs as rows, samples as columns
+metadata <- read.csv("metadata.csv", row.names = 1)     # samples as rows, add the vagitype assignment as factor2
+
+#####Subset full raw read table to those in the metadata file
+metadata <- metadata[rownames(metadata) != "", ]
+otu_table_sub <- otu_table[ , rownames(metadata)]    # keep only samples in metadata
+
+#####Create a % proportion table from the raw read table
+otu_table_prop <- sweep(otu_table_sub, 2, colSums(otu_table_sub), "/")
+
+
+#####Summarize read counts by vagitype (Factor2)
+samp_colsum <- data.frame(colSums(otu_table_sub))
+colnames(samp_colsum) <- "ReadCount"
+samp_colsum$SampleID <- rownames(samp_colsum)
+metadata$SampleID <- rownames(metadata)
+meta_reads <- merge(metadata, samp_colsum, by = "SampleID")
+summary_df <- meta_reads %>%
+  group_by(Factor2) %>%
+  summarise(
+    mean_reads = mean(ReadCount),
+    median_reads = median(ReadCount),
+    n_samples = n()
+  ) %>%
+  arrange(desc(mean_reads))
+
+plot_df <- summary_df %>%
+  pivot_longer(cols = c(mean_reads, median_reads), names_to = "statistic", values_to = "reads")
+
+ggplot(plot_df, aes(x = reorder(Factor2, -reads), y = reads, fill = statistic)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  labs(x = "Vagitype (Factor2)", y = "Read Count", fill = "Statistic",
+       title = "Average and Median Read Count per Vagitype") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+kruskal.test(ReadCount ~ Factor2, data = meta_reads)
+pairwise.wilcox.test(meta_reads$ReadCount, meta_reads$Factor2, p.adjust.method = "BH")
+
+
+
+
+#####Summarize read counts by 2-way Factor (i.e. preterm vs term)
+summary_df_factor <- meta_reads %>%
+  group_by(Factor) %>%
+  summarise(
+    mean_reads = mean(ReadCount),
+    median_reads = median(ReadCount),
+    n_samples = n()
+  ) %>%
+  arrange(desc(mean_reads))
+
+plot_df_factor <- summary_df_factor %>%
+  pivot_longer(cols = c(mean_reads, median_reads), names_to = "statistic", values_to = "reads")
+
+ggplot(plot_df_factor, aes(x = reorder(Factor, -reads), y = reads, fill = statistic)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  labs(x = "Factor", y = "Read Count", fill = "Statistic",
+       title = "Average and Median Read Count per Factor") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Kruskal-Wallis and pairwise Wilcoxon for Factor
+kruskal.test(ReadCount ~ Factor, data = meta_reads)
+pairwise.wilcox.test(meta_reads$ReadCount, meta_reads$Factor, p.adjust.method = "BH")
+
+
+
+
+
+
+
+#####Alpha diversity Rarefaction
+otu_for_rare <- t(otu_table_sub)  # samples as rows
+min_depth <- 1000
+n_reps <- 100  # Number of rarefaction rounds
+set.seed(42)   # For reproducibility
+
+# Store results
+alpha_list <- vector("list", n_reps)
+
+for (i in seq_len(n_reps)) {
+  otu_rare_list <- Rarefy(otu_for_rare, depth = min_depth)
+  otu_table_rare <- as.data.frame(otu_rare_list$otu.tab.rff)
+  otu_table_rare <- t(otu_table_rare)  # OTUs as rows, samples as columns
+  
+  otu_mat_rare <- as.matrix(otu_table_rare)
+  OTU_rare <- otu_table(otu_mat_rare, taxa_are_rows=TRUE)
+  SAM <- sample_data(metadata)
+  ps_rare <- phyloseq(OTU_rare, SAM)
+  
+  alpha_div <- estimate_richness(ps_rare, measures = c("Shannon", "Observed"))
+  alpha_div$Evenness <- alpha_div$Shannon / log(alpha_div$Observed)
+  alpha_div$SampleID <- rownames(alpha_div)
+  alpha_list[[i]] <- alpha_div[, c("SampleID", "Shannon", "Observed", "Evenness")]
+}
+
+# Combine and average across reps
+alpha_all <- bind_rows(alpha_list)
+
+alpha_div_avg <- alpha_all %>%
+  group_by(SampleID) %>%
+  summarise(
+    Shannon = mean(Shannon, na.rm = TRUE),
+    Observed = mean(Observed, na.rm = TRUE),
+    Evenness = mean(Evenness, na.rm = TRUE)
+  )
+
+alpha_div_avg$SampleID <- gsub("\\.", "-", alpha_div_avg$SampleID)
+alpha_div_merged <- merge(alpha_div_avg, metadata, by.x = "SampleID", by.y = "row.names")
+
+
+
+# Detect number of groups in your Factor
+n_groups <- length(unique(alpha_div_merged$Factor))
+
+# Initialize results list
+test_results <- list()
+
+# Function to run tests and collect results
+run_tests <- function(metric) {
+  values <- alpha_div_merged[[metric]]
+  if(n_groups == 2) {
+    # Wilcoxon test
+    res <- wilcox.test(values ~ Factor, data = alpha_div_merged)
+    return(data.frame(
+      Metric = metric,
+      Test = "Wilcoxon",
+      P_value = res$p.value,
+      stringsAsFactors = FALSE
+    ))
+  } else {
+    # Kruskal-Wallis test
+    res <- kruskal.test(values ~ Factor, data = alpha_div_merged)
+    return(data.frame(
+      Metric = metric,
+      Test = "Kruskal-Wallis",
+      P_value = res$p.value,
+      stringsAsFactors = FALSE
+    ))
+  }
+}
+
+# Run for each diversity metric
+metrics <- c("Shannon", "Observed", "Evenness")
+for (metric in metrics) {
+  test_results[[metric]] <- run_tests(metric)
+}
+
+
+
+
+# Summary test results (Kruskal/ Wilcoxon)
+alpha_div_table <- do.call(rbind, test_results)
+
+# Pairwise test results
+pairwise_table <- data.frame() # initialize
+
+if(n_groups > 2) {
+  for (metric in metrics) {
+    pairwise <- pairwise.wilcox.test(
+      alpha_div_merged[[metric]], 
+      alpha_div_merged$Factor, 
+      p.adjust.method = "BH"
+    )
+    pw <- as.data.frame(as.table(pairwise$p.value))
+    pw <- pw[!is.na(pw$Freq), ]
+    if(nrow(pw) > 0){
+      pw$Metric <- metric
+      pw$Test <- "Pairwise Wilcoxon (BH adj)"
+      pw <- pw[, c("Metric", "Test", "Var1", "Var2", "Freq")]
+      names(pw) <- c("Metric", "Test", "Group1", "Group2", "P_value")
+      pairwise_table <- rbind(pairwise_table, pw)
+    }
+  }
+}
+
+# Print results
+print(alpha_div_table)   # overall Kruskal/ Wilcoxon p-values
+print(pairwise_table)    # pairwise Wilcoxon p-values
+
+
+# Boxplots (Shannon, Observed, Evenness)
+p1 <- ggplot(alpha_div_merged, aes(x=Factor, y=Shannon, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Shannon Diversity", x="Factor", y="Shannon Index") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+        )
+
+print(p1)
+
+p2 <- ggplot(alpha_div_merged, aes(x=Factor, y=Observed, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Observed OTUs", x="Factor", y="Number of OTUs") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )
+
+p3 <- ggplot(alpha_div_merged, aes(x=Factor, y=Evenness, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Evenness", x="Factor", y="Evenness") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )
+
+p1 + p2 + p3 + plot_layout(ncol = 3)
+
+
+
+
+
+
+
+
+
+
+
+otu_table_rare_t <- t(otu_table_rare)
+bray_dist <- vegdist(otu_table_rare_t, method = "bray")
+metadata_ordered <- metadata[rownames(otu_table_rare_t), , drop = FALSE]
+
+# PCoA
+pcoa <- cmdscale(bray_dist, k = 2, eig = TRUE)
+pcoa_df <- as.data.frame(pcoa$points)
+pcoa_df$SampleID <- rownames(pcoa_df)
+pcoa_df <- merge(pcoa_df, metadata_ordered, by.x="SampleID", by.y="row.names")
+
+beta<- ggplot(pcoa_df, aes(x=V1, y=V2, color=Factor, fill=Factor)) +
+  geom_point(size=3, alpha=0.7) +
+  stat_ellipse(level=0.95, geom="polygon", alpha=0.2, show.legend=FALSE) +
+  labs(title="PCoA of Bray-Curtis Distances", x="PCoA1", y="PCoA2") +
+  theme_classic() +
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )
+
+# PERMANOVA
+adonis2(bray_dist ~ Factor, data = metadata_ordered)
+
+##############################################################
+
+
+# --- Relative abundance (stacked bar: use proportional data) ---
+otu_table_prop_t <- t(otu_table_prop)
+
+# Select top N OTUs across all samples for plotting
+N <- 15
+otu_sums <- colSums(otu_table_prop_t)
+top_otus <- names(sort(otu_sums, decreasing=TRUE))[1:N]
+otu_top_df <- cbind(
+  otu_table_prop_t[, top_otus, drop=FALSE],
+  Other = rowSums(otu_table_prop_t[, !(colnames(otu_table_prop_t) %in% top_otus), drop=FALSE])
+)
+otu_top_rel <- as.data.frame(otu_top_df / rowSums(otu_top_df))
+otu_top_rel$SampleID <- rownames(otu_top_rel)
+melted <- melt(otu_top_rel, id.vars="SampleID", variable.name="OTU", value.name="RelAbund")
+melted_meta <- merge(melted, 
+                     alpha_div_merged[, c("SampleID", "Shannon", "Factor", "Factor2")], 
+                     by="SampleID", all.x=TRUE)
+
+
+
+sample_order_df <- alpha_div_merged[, c("SampleID", "Shannon", "Factor2")]
+# Manually set Factor2 order: Lactobacillus types first, then others alphabetically
+factor2_levels <- unique(sample_order_df$Factor2)
+factor2_levels <- c(
+  "Lactobacillus crispatus_cluster",
+  "Lactobacillus iners",
+  sort(setdiff(factor2_levels, c("Lactobacillus crispatus_cluster", "Lactobacillus iners")))
+)
+sample_order_df$Factor2 <- factor(sample_order_df$Factor2, levels = factor2_levels)
+
+
+# Now arrange: first by Factor2 (with Lactobacillus left), then by diversity (Shannon)
+ordered_samples <- sample_order_df %>%
+  arrange(Factor2, Shannon) %>%
+  pull(SampleID)
+
+# Apply this order to melted_meta
+melted_meta$SampleID <- factor(melted_meta$SampleID, levels = ordered_samples)
+
+# --- Color palette (adjust to your OTUs as needed) ---
+c25 <- c(
+  "Actinomyces neuii" = "beige",
+  "Atopobium vaginae" = "#c49c94",
+  "Fannyhessea vaginae" =  "#c49c94",
+  "Atopobium_vaginae" = "#c49c94",
+  "Atopobium OTU7" = "#c49c94",
+  "Bacteroides vulgatus_dorei" = "gray",
+  "Bifidobacterium breve_cluster" = "brown1",
+  "Brevibacterium ravenspurgense" = "gray",
+  "Clostridiaceae_1 OTU17" = "darkgoldenrod1",
+  "Clostridium colicanis"= "darkgoldenrod1",
+  "Corynebacterium aurimucosum_nigricans" = "darkolivegreen",
+  "Corynebacterium cluster58" = "darkolivegreen",
+  "Corynebacterium thomssenii_sundsvallense" = "darkolivegreen",
+  "Corynebacterium cluster45" = "darkolivegreen",
+  "Corynebacterium simulans_striatum" = "darkolivegreen",
+  "Corynebacterium pyruviciproducens_cluster" = "darkolivegreen",
+  "Dialister micraerophilus" = "darkblue",
+  "Finegoldia magna" = "gold3",
+  "Finegoldia_magna" = "gold3",
+  "Enterobacteriaceae cluster31" = "lightgreen",
+  "Enterobacteriaceae_cluster31" = "lightgreen",
+  "Gardnerella vaginalis" = "#d62728",
+  "Gardnerella_vaginalis" = "#d62728",
+  "Granulicatella adiacens"  = "azure1",
+  "Gemella morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Gemella_morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Haemophilus cluster6" = "cornsilk3",
+  "Lachnospiraceae BVAB1" = "#ff7f0e",
+  "Lachnospiraceae_BVAB1" = "#ff7f0e",
+  "Lachnocurva vaginae" = "#ff7f0e",
+  "Clostridiales OTU22" = "#FFC300",
+  "Clostridiales BVAB2", "#FFC300",
+  "Lactobacillus crispatus_cluster" = "#fff5aa",
+  "Lactobacillus_crispatus_cluster" = "#fff5aa",
+  "Lactobacillus gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus_gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus iners" = "#aec7e8",
+  "Lactobacillus_iners" = "#aec7e8",
+  "Lactobacillus jensenii" = "#ffbb78",
+  "Lactobacillus_jensenii" = "#ffbb78",
+  "Lactobacillus delbrueckii" = "lightpink",
+  "Lactobacillus_delbrueckii" = "lightpink",
+  "Megasphaera OTU70_type1" = "hotpink4",
+  "Megasphaera_OTU70_type1" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Mycoplasma hominis" = "seagreen1",
+  "Mycoplasma girerdii" = "springgreen",
+  "Mycoplasma_hominis" = "springgreen",
+  "Mycoplasma_girerdii" = "springgreen",
+  "No type" = "black",
+  "Neisseria flava/mucosa/pharyngis/sicca" = "yellowgreen",
+  "Neisseria flavescens" = "yellowgreen",
+  "Prevotella cluster2" = "#17becf",
+  "Prevotella cluster 2" = "#17becf",
+  "Prevotella_cluster2" = "#17becf",
+  "Prevotella amnii" = "cornflowerblue",
+  "Prevotella_amnii" = "cornflowerblue",
+  "Prevotella bivia" = "cornflowerblue",
+  "Prevotella_bivia" = "cornflowerblue",
+  "Prevotella disiens" = "cornflowerblue",
+  "Prevotella_disiens" = "cornflowerblue",
+  "Prevotella denticola" = "cornflowerblue",
+  "Prevotella_denticola" = "cornflowerblue",
+  "Prevotella oris" = "cornflowerblue",
+  "Prevotella_oris" = "cornflowerblue",
+  "Prevotella cluster50" = "cornflowerblue",
+  "Prevotella OTU44" = "cornflowerblue",
+  "Prevotella_OTU44" = "cornflowerblue",
+  "Prevotella intermedia" = "cornflowerblue",
+  "Porphyromonas pasteri" = "lightslateblue",
+  "Rothia aeria/dentocariosa" = "seashell",
+  "TM7 OTU-H1" = "mediumvioletred",
+  "TM7_OTU-H1" = "mediumvioletred",
+  "Sneathia amnii" = "#9467bd",
+  "Sneathia sanguinegens" = "#C77Cff",
+  "Sneathia_amnii" = "#9467bd",
+  "Sneathia_sanguinegens" = "#C77CFF",
+  "Staphylococcus cluster47" = "#9edae5",
+  "Streptococcus agalactiae" = "tan4",
+  "Streptococcus anginosus" = "#80CDC1",
+  "Streptococcus cluster29" = "cyan",
+  "Streptococcus_cluster29" = "cyan",
+  "Streptococcus cluster 29" = "cyan",
+  "Streptococcus cluster21" = "darkcyan",
+  "Streptococcus mutans" = "darkcyan",
+  "Streptococcus salivarius_thermophilus_vestibularis" = "darkcyan",
+  "NER" = "gray",
+  "NonLactobacillus" = "red",
+  "Lactobacillus" = "#fff5aa",
+  "Lactobacillus_iners" = "#aec7e8",
+  "Other" = "darkgray",
+  "Ureaplasma cluster23" = "darkgreen",
+  "Ureaplasma_cluster23" = "darkgreen"
+)
+
+otu_order <- melted_meta %>%
+  group_by(OTU) %>%
+  summarise(mean_abund = mean(RelAbund, na.rm=TRUE)) %>%
+  arrange(desc(mean_abund)) %>%
+  pull(OTU)
+
+melted_meta$OTU <- factor(melted_meta$OTU, levels = otu_order)
+
+
+#stacked bar
+p_bar <- ggplot(melted_meta, aes(x = SampleID, y = RelAbund, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  facet_grid(. ~ Factor, scales = "free_x", space = "free_x") +
+  labs(
+    title = "Relative Abundance by Factor",
+    y = "Percent Relative abundance"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.title.x = element_text(size = 22),
+    axis.title.y = element_text(size = 22),
+    strip.text = element_text(size = 20),      # Facet labels
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 10),
+    axis.ticks.x = element_blank()
+  ) +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+print(p_bar)
+
+
+
+
+
+
+p_bar_wrap <- ggplot(melted_meta, aes(x = SampleID, y = RelAbund, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Factor, ncol = 1, scales = "free_x") +   # one column: stacked vertically
+  labs(
+    title = "Relative Abundance by Vagitype",
+    subtitle = "Final Downsampling to 1000 reads \n per sample after N = 100 Downsamplings",
+    y = "Percent Relative abundance"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 15),
+    axis.title.x = element_blank(),
+    strip.text = element_text(size = 20),
+    plot.title = element_text(size = 28, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.title = element_text(size =20),
+    axis.ticks.x = element_blank()
+  ) +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+print(p_bar_wrap)
