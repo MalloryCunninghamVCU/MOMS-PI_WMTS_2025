@@ -1,7 +1,8 @@
 # MOMS-PI_WMTS_2025
 Code used to process and analyze all vaginal metatranscriptomic, 16s rRNA vaginal microbiome profile, and vaginal cytokine data from the MOMS-PI project.
 
-**Requirements** /n
+**Requirements**
+
 Fastp(v0.23.4)
 Kraken2(v2.1.3 with k2_pluspf (2023-10-09) and additional in-house reference vaginal microbe genomes)
 MultiQC(v1.17)
