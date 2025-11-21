@@ -273,7 +273,7 @@ adonis2(bray_dist ~ Factor, data = metadata_ordered)
 
 
 
-#####Data visualization
+#####Data visualization#####
 
 
 ##### Vaginal Taxa Relative abundance (stacked bar with proportional data (each taxa out or 100%)
