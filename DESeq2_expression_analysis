@@ -55,6 +55,7 @@ library(org.Hs.eg.db)
 
 ###load DESeq2 object
 dds <- readRDS("dds.rds")
+vsd <- vst(dds)
 
 ###Test for significant associations between covariates
 df = as.data.frame(colData(dds))
@@ -303,7 +304,6 @@ percentVar <- round(100 * attr(pcaData, "percentVar"))
 pcaData$name <- rownames(pcaData)
 
 ###PC1/PC2 ranges from all contrasts
-set.seed(567)
 all_pc1 <- c()
 all_pc2 <- c()
 for (name in names(contrasts)) {
@@ -384,7 +384,6 @@ for (name in names(contrasts)) {
 
 
 #####Adonis test for PCoA plot
-set.seed(123)  
 contrast_pvals <- c()
 contrast_names <- c()
 for (name in names(contrasts_vagitype)) {
@@ -415,14 +414,13 @@ print(result_table)
 
 
 ###################################################################
-set.seed(678)
 volcano_plot_list <- c()
 
 for (i in seq_along(results_list)) {
   results_df <- results_list[[i]]
   results_df$gene <- results_df$gene_name
   
-  # ---- FILTER genes with baseMean > 5 ----
+  ###filter genes w basemean > 10
   results_df <- results_df %>% filter(baseMean >= 10)
   
   # Add volcano plot categories
@@ -496,3 +494,457 @@ for (plot_name in names(volcano_plot_list)) {
 }
 
 
+
+#####Find commonly significantly differentially regulated genes and export tables
+# Specify the contrast names for each vagitype group (as used in your contrasts/results_list)
+dysbiosis_contrasts <- c(
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster",
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster",
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster"
+)
+
+extract_sig_genes <- function(df, direction = "up", lfc_thresh = 0, padj_thresh = 0.05, basemean_thresh = 10) {
+  if (direction == "up") {
+    sig <- df$padj < padj_thresh & df$log2FoldChange > lfc_thresh & df$baseMean > basemean_thresh
+  } else {
+    sig <- df$padj < padj_thresh & df$log2FoldChange < -lfc_thresh & df$baseMean > basemean_thresh
+  }
+  rownames(df)[which(sig)]
+}
+
+# Find common up/down genes among a group of contrasts
+get_common_genes <- function(contrast_names, results_list, direction = "up") {
+  sig_lists <- lapply(contrast_names, function(nm) {
+    extract_sig_genes(results_list[[nm]], direction = direction)
+  })
+  Reduce(intersect, sig_lists)
+}
+
+common_dysbiosis_up <- get_common_genes(dysbiosis_contrasts, results_list, direction = "up")
+common_dysbiosis_down <- get_common_genes(dysbiosis_contrasts, results_list, direction = "down")
+
+# Optionally, get log2FC and padj averages for the common genes (across all contrasts)
+get_gene_stats <- function(contrast_names, results_list, gene_list) {
+  stats <- do.call(rbind, lapply(contrast_names, function(nm) {
+    df <- results_list[[nm]]
+    # Remove version if present in gene_list for subsetting
+    gene_list_novers <- sub("\\..*", "", gene_list)
+    rownames(df) <- sub("\\..*", "", rownames(df))
+    df <- df[gene_list_novers, c("padj", "log2FoldChange"), drop = FALSE]
+    df$ensembl_gene_id <- rownames(df)
+    df$Contrast <- nm
+    df
+  }))
+  aggregate(cbind(padj, log2FoldChange) ~ ensembl_gene_id, data = stats, FUN = mean)
+}
+
+# Save results with gene symbol annotation
+if(length(common_dysbiosis_up) > 0) {
+  dysbiosis_up_stats <- get_gene_stats(dysbiosis_contrasts, results_list, common_dysbiosis_up)
+  # Add gene symbol column
+  dysbiosis_up_stats$gene_symbol <- gene_symbols[dysbiosis_up_stats$ensembl_gene_id]
+  write.csv(dysbiosis_up_stats, "common_dysbiosis_up_genes.csv", row.names = FALSE)
+}
+if(length(common_dysbiosis_down) > 0) {
+  dysbiosis_down_stats <- get_gene_stats(dysbiosis_contrasts, results_list, common_dysbiosis_down)
+  dysbiosis_down_stats$gene_symbol <- gene_symbols[dysbiosis_down_stats$ensembl_gene_id]
+  write.csv(dysbiosis_down_stats, "common_dysbiosis_down_genes.csv", row.names = FALSE)
+}
+
+# Print the number of common genes for each
+cat("Common upregulated dysbiosis genes:", length(common_dysbiosis_up), "\n")
+cat("Common downregulated dysbiosis genes:", length(common_dysbiosis_down), "\n")
+
+
+
+
+#####Export individual contrast tables
+for (contrast_name in names(results_list)) {
+  res_df <- results_list[[contrast_name]]
+  if (is.null(res_df) || nrow(res_df) == 0) next
+  
+  # Filter for significant genes (padj < 0.05 and abs(log2FC) > 0)
+  sig_df <- subset(res_df, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 0 & baseMean > 10)
+  
+  # Only export if there are significant genes
+  if (nrow(sig_df) > 0) {
+    sig_df$gene <- rownames(sig_df)
+    # Remove version if present for mapping
+    sig_df$ensembl_id_noversion <- sub("\\..*", "", sig_df$gene)
+    # Map Ensembl IDs to gene symbols from your precomputed vector
+    sig_df$gene_symbol <- gene_symbols[sig_df$ensembl_id_noversion]
+    out_file <- paste0("DE_genes_", gsub("[ .]", "_", contrast_name), ".csv")
+    write.csv(sig_df, file = out_file, row.names = FALSE)
+    message("Exported: ", out_file)
+  } else {
+    message("No significant genes for ", contrast_name)
+  }
+}
+
+
+
+
+######Combine results from all contrasts for broad gene overview
+combined_upregulated <- data.frame()
+combined_downregulated <- data.frame()
+
+for (contrast_name in names(results_list)) {
+  res_df <- results_list[[contrast_name]]
+  if (is.null(res_df) || nrow(res_df) == 0) next
+  
+  # Upregulated genes
+  sig_up <- subset(res_df, !is.na(padj) & padj < 0.05 & log2FoldChange > 0 & baseMean > 10)
+  if (nrow(sig_up) > 0) {
+    sig_up$gene <- rownames(sig_up)
+    # Remove version for mapping
+    sig_up$ensembl_id_noversion <- sub("\\..*", "", sig_up$gene)
+    sig_up$gene_symbol <- gene_symbols[sig_up$ensembl_id_noversion]
+    sig_up$contrast <- contrast_name
+    sig_up_short <- sig_up[, c("gene", "gene_symbol", "padj", "log2FoldChange", "contrast")]
+    combined_upregulated <- rbind(combined_upregulated, sig_up_short)
+  }
+  
+  # Downregulated genes
+  sig_down <- subset(res_df, !is.na(padj) & padj < 0.05 & log2FoldChange < 0 & baseMean > 10)
+  if (nrow(sig_down) > 0) {
+    sig_down$gene <- rownames(sig_down)
+    sig_down$ensembl_id_noversion <- sub("\\..*", "", sig_down$gene)
+    sig_down$gene_symbol <- gene_symbols[sig_down$ensembl_id_noversion]
+    sig_down$contrast <- contrast_name
+    sig_down_short <- sig_down[, c("gene", "gene_symbol", "padj", "log2FoldChange", "contrast")]
+    combined_downregulated <- rbind(combined_downregulated, sig_down_short)
+  }
+}
+
+write.csv(combined_upregulated, "all_upregulated_genes_combined.csv", row.names = FALSE)
+write.csv(combined_downregulated, "all_downregulated_genes_combined.csv", row.names = FALSE)
+
+
+
+
+
+######variance partition analysis#####
+form <- ~Med_final + systolic_scaled + age_scaled + Race + ga_atSampling_weeks_scaled +  IncomeModified + vagitype
+vsd_data = assay(vsd)
+metadata_df <- as.data.frame(colData(vsd))
+varPart <- fitExtractVarPartModel(vsd_data, form, metadata_df)
+vp <- sortCols(varPart)  #sort columns by the amount of variance explained
+vp_sorted <- vp[order(vp$vagitype, decreasing = TRUE), ]
+violin <- plotVarPart(vp)
+
+# Compute Canonical Correlation Analysis (CCA) between all pairs of variables, returns absolute correlation value
+C <- canCorPairs(form, metadata_df)
+
+# Plot correlation matrix between all pairs of variables
+plotCorrMatrix(C)
+mat_cor <- as.matrix(C)
+
+big_theme <- theme(
+  plot.caption = element_text(size = 100),
+  plot.tag = element_text(size = 100)
+)
+
+cormat_plot <- ggcorrplot(
+  mat_cor,
+  lab = TRUE,
+  lab_col = "black",
+  lab_size = 20   # Controls the matrix label font
+) +
+  theme(
+    axis.text.x = element_text(size = 60, family = "Arial", angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 60, family = "Arial"),
+    plot.title = element_text(size = 60, face = "bold", family = "Arial"),
+    legend.position = "none",
+  ) +  labs(tag = "B") + big_theme
+
+
+violin <- plotVarPart(vp) +
+  theme(
+    axis.title.x = element_text(size = 60, family = "Arial"),
+    axis.title.y = element_text(size = 60, family = "Arial"),
+    axis.text.x = element_text(size = 60, family = "Arial"),
+    axis.text.y = element_text(size = 60, family = "Arial"),
+    legend.title = element_text(size = 60, family = "Arial"),
+    legend.text = element_text(size = 60, family = "Arial"),
+    plot.title = element_text(size = 60, face = "bold", family = "Arial"),
+  ) +  labs(tag = "A") + big_theme
+
+design <- "
+ABC
+ABC
+"
+combined_plot10 <- violin + cormat_plot
+plot_layout(design = design)
+
+
+
+big_theme3 <- theme(
+  axis.text = element_text(size = 90),
+  legend.text = element_text(size = 60),
+  legend.title = element_text(size = 90),
+  axis.title.y = element_text(size = 80),
+  axis.title.x = element_text(size = 80),
+  plot.title = element_text(size = 60),
+  plot.caption = element_text(size = 80),
+  plot.tag = element_text(size = 180)
+)
+
+
+allbacteria_plot <- (
+  # Row 1
+  (
+    volcano_plot_list$vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster + 
+      labs(tag = "A") + big_theme3 |
+      pca_contrast_plot_list$vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster + 
+      labs(tag = "B", caption = "*padj = ") + big_theme3 |
+      volcano_plot_list$vagitype_No.type_vs_Lactobacillus.crispatus_cluster + 
+      labs(tag = "C") + big_theme3 |
+      pca_contrast_plot_list$vagitype_No.type_vs_Lactobacillus.crispatus_cluster + 
+      labs(tag = "D", caption = "*padj = ") + big_theme3
+  ) /
+    # Row 2
+    (
+      volcano_plot_list$vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "E") + big_theme3 |
+        pca_contrast_plot_list$vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "F", caption = "*padj = ") + big_theme3 |
+        volcano_plot_list$vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "G") + big_theme3 |
+        pca_contrast_plot_list$vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "H", caption = "padj = ") + big_theme3
+    ) /
+    # Row 3
+    (
+      volcano_plot_list$vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "I") + big_theme3 |
+        pca_contrast_plot_list$vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster + 
+        labs(tag = "J", caption = "padj = ") + big_theme3 |
+        plot_spacer() + big_theme3 |
+        plot_spacer() + big_theme3
+    )
+)
+
+
+
+
+
+#####Visualize log2fc of inflammatory genes BCL2A1, CXCL8(IL8), NCF2, and IL1B from DESeq2#####
+head(res_df)
+vagitype_contrasts <- c(
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster",
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster",
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster"
+)
+
+genes_of_interest <- c("IL1B", "CXCL8", "NCF2", "BCL2A1", "CD59")
+
+vagitype_results <- results_list[grep("^vagitype_", names(results_list))]
+
+plot_log2fc_bar <- function(gene_of_interest, vagitype_results, c25) {
+  log2fc_df <- data.frame(
+    Contrast = character(),
+    log2FoldChange = numeric(),
+    lfcSE = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  for (contrast_name in names(vagitype_results)) {
+    res_df <- vagitype_results[[contrast_name]]
+    # Find the Ensembl ID for the gene symbol
+    ensembl_id <- rownames(res_df)[res_df$gene_name == gene_of_interest]
+    if (length(ensembl_id) > 0) {
+      log2fc <- res_df[ensembl_id, "log2FoldChange"]
+      lfcse <- res_df[ensembl_id, "lfcSE"]
+      log2fc_df <- rbind(log2fc_df, data.frame(
+        Contrast = contrast_name,
+        log2FoldChange = log2fc,
+        lfcSE = lfcse
+      ))
+    }
+  }
+  
+  # Make a nice label
+  log2fc_df$CleanLabel <- log2fc_df$Contrast
+  log2fc_df$CleanLabel <- gsub("^vagitype_", "", log2fc_df$CleanLabel)
+  log2fc_df$CleanLabel <- gsub("_vs_Lactobacillus\\.crispatus_cluster$", "", log2fc_df$CleanLabel)
+  log2fc_df$CleanLabel <- gsub("\\.", " ", log2fc_df$CleanLabel)
+  log2fc_df$CleanLabel <- gsub("cluster(\\d+)", "cluster \\1", log2fc_df$CleanLabel)
+  
+  ggplot(log2fc_df, aes(x = CleanLabel, y = log2FoldChange, fill = CleanLabel)) +
+    geom_col(width = 0.7) +
+    geom_errorbar(aes(ymin = log2FoldChange - lfcSE, ymax = log2FoldChange + lfcSE), width = 0.2) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(title = paste("log2 Fold Change of", gene_of_interest),
+         y = "log2 Fold Change", x = "Vagitype vs. L. crispatus cluster") +
+    scale_fill_manual(values = c25) +
+    theme_classic() +
+    theme(
+      legend.position = "none",
+      axis.title = element_text(size = 30),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 40),  # increase x axis text size
+      axis.text.y = element_text(size = 30)                         # increase y axis text size
+    )
+
+}
+
+bar_list <- list()
+for (gene in genes_of_interest) {
+  p <- plot_log2fc_bar(gene, vagitype_results, c25)
+  print(p)  # Optional: show plot as you go
+  bar_list[[gene]] <- p
+}
+
+
+plot13 <- (
+  (bar_list$BCL2A1 + labs(tag = "A")) | (bar_list$CXCL8 + labs(tag = "B"))
+) /
+  (
+    (bar_list$IL1B + labs(tag = "C"))  | (bar_list$NCF2 + labs(tag = "D"))
+  )
+
+
+
+
+
+
+
+######Commonly significantly regulated genes venn diagrams
+venn_list <- lapply(dysbiosis_contrasts, function(nm) {
+  ens_ids <- extract_sig_genes(results_list[[nm]], direction = "up")
+  gene_symbols[ens_ids][!is.na(gene_symbols[ens_ids])]
+})
+names(venn_list) <- str_wrap(c(
+  "Up in G. vaginalis vs. L. crispatus",
+  "Up in L. vaginae vs. L. crispatus",
+  "Up in No type vs. L. crispatus"
+), width = 20)
+
+venn_list_2 <- lapply(dysbiosis_contrasts, function(nm) {
+  ens_ids <- extract_sig_genes(results_list[[nm]], direction = "down")
+  gene_symbols[ens_ids][!is.na(gene_symbols[ens_ids])]
+})
+names(venn_list_2) <- str_wrap(c(
+  "Down in G. vaginalis vs. L. crispatus",
+  "Down in L. vaginae vs. L. crispatus",
+  "Down in No type vs. L. crispatus"
+), width = 20)
+
+
+v1 <- ggVennDiagram(venn_list, 
+                    label_color = "black",
+                    label_geom = "text",
+                    label_size = 10,
+                    set_size = 6,
+                    fontface = "bold",
+                    set_fontface = "bold",
+                    edge_size = 0.5)+
+  scale_fill_gradient(low = "#F0F0F0", high = "darkgray")
+
+
+v2 <- ggVennDiagram(venn_list_2, 
+              label_color = "black",
+              label_geom = "text",
+              label_size = 10,
+              set_size = 6,
+              fontface = "bold",
+              set_fontface = "bold",
+              edge_size = 0.5)+
+  scale_fill_gradient(low =  "#F0F0F0", high = "darkgray")
+
+plot13 <- (
+  v1 + 
+    theme(
+      legend.position = "none", 
+      plot.margin = margin(r = 30, unit = "pt"),
+      plot.tag = element_text(size = 25)  # shrink A label
+    ) + 
+    labs(tag = "A")
+) |
+  (
+    v2 + 
+      theme(
+        legend.position = "none",
+        plot.tag = element_text(size = 25)  # shrink B label
+      ) + 
+      labs(tag = "B")
+  )
+
+plot13 <- plot13 + plot_annotation(
+  caption = "Significant Differentially Expressed Genes among Dysbiotic Vagitypes",
+  theme = theme(
+    plot.caption = element_text(hjust = 0.5, size = 15, margin = margin(t = 10))
+  )
+)
+
+
+print(plot13)
+
+
+
+
+#####Sampling date to delivery distance dotplot#####
+meta <- as.data.frame(colData(dds))
+
+meta$ga_difference <- abs(meta$ga_atDel_weeks - meta$ga_atSampling_weeks)
+# order rows by ga_atSampling_weeks (largest first)
+meta <- meta[order(meta$ga_atSampling_weeks, decreasing = TRUE, na.last = TRUE), ]
+
+# numeric y-axis index; index 1 will be plotted at the top with scale_y_reverse()
+meta$SampleIndex <- seq_len(nrow(meta))
+
+samp_dists <- ggplot(meta) +
+  geom_segment(aes(x = ga_atSampling_weeks, xend = ga_atDel_weeks,
+                   y = SampleIndex, yend = SampleIndex), color = "gray", size = 0.5) +
+  geom_point(aes(x = ga_atSampling_weeks, y = SampleIndex, color = "Sample"), size = 3) +
+  geom_point(aes(x = ga_atDel_weeks, y = SampleIndex, color = "Delivery"), size = 3) +
+  geom_vline(xintercept = 37, linetype = "dashed", color = "black", size = 1) +
+  scale_color_manual(name = "Timepoint", values = c("Sample" = "black", "Delivery" = "red")) +
+  labs(x = "Gestational Age at Sample Collection and Delivery (weeks)", y = "Sample",
+       title = "") +
+  theme_classic() +
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA, size = 1),
+    axis.line = element_line(colour = "black", size = 1),
+    axis.text = element_text(size = 20),
+    axis.text.x = element_text(size = 30),
+    axis.text.y = element_text(size = 30),
+    legend.text = element_text(size = 20),
+    axis.title.x = element_text(size = 30),
+    axis.title.y = element_text(size = 30),
+    axis.ticks = element_line(colour = "black", size = 2),
+    legend.background = element_rect(fill = "white", size = 0.5, linetype = "solid")
+  ) +
+  scale_x_continuous(breaks = c(13, 26, 37, 40)) +
+  scale_y_reverse()  # index 1 (largest sampling GA) appears at the top
+
+print(samp_dists)
+
+
+
+
+#####Modifications for model when subsetting the data into only black women#####
+
+contrasts <- list(
+  "Non_Infectious_Medication_vs_No_medication" = list(factor = "Med_final", level1 = "Non_Infectious_Medication", level2 = "No_medication"),
+  "Med_final_Progesterone_vs_No_medication" = list(factor = "Med_final", level1 = "Progesterone", level2 = "No_medication"),
+  "IncomeModified_Under_15_000_vs_Over15000" = list(factor = "IncomeModified", level1 = "Over15000", level2 = "Under_15_000"),
+  "IncomeModified_Unknown_vs_Over15000" = list(factor = "IncomeModified", level1 = "Unknown", level2 = "Under_15_000"),
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Gardnerella vaginalis", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus gasseri_cluster", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus iners", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lachnocurva vaginae", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "No type", level2 = "Lactobacillus crispatus_cluster")
+)
+contrasts_vagitype <- list(
+  "vagitype_Gardnerella.vaginalis_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Gardnerella vaginalis", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.gasseri_cluster_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus gasseri_cluster", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lactobacillus.iners_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lactobacillus iners", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_Lachnocurva.vaginae_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "Lachnocurva vaginae", level2 = "Lactobacillus crispatus_cluster"),
+  "vagitype_No.type_vs_Lactobacillus.crispatus_cluster" = list(factor = "vagitype", level1 = "No type", level2 = "Lactobacillus crispatus_cluster")
+)
+
+
+anno <- as.data.frame(colData(dds)[, c("vagitype", "Med_final", "systolic_scaled", "age_scaled", "ga_atSampling_weeks_scaled", "IncomeModified")])
+
+
+form <- ~Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled + IncomeModified + vagitype
