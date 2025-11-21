@@ -11,11 +11,7 @@ library(egg)
 
 
 
-#df <- combined_qPCRdat_pre_outlierfilter
-
-
-
-########################################sub for only useful vagitypes
+df <- combined_qPCRdat_pre_outlierfilter
 
 # Define the Vagitypes you want to keep
 major_vagitypes <- c(
@@ -30,47 +26,7 @@ major_vagitypes <- c(
 
 vagitypes <- c("Lachnocurva vaginae", "Lactobacillus crispatus_cluster","Lactobacillus gasseri_cluster", "Lactobacillus iners", "No type", "Gardnerella vaginalis")
 genes <- c("IL1B", "CXCL8", "NCF2", "BCL2A1")
-
-
-
-df <- df[df$vagitype %in% major_vagitypes, ]
-#df<- subset(df, ABX_final == "No")
-
-######################run outlier removal until there are no outliers
-
-# Identify outliers for each Vagitype x TargetName group
-outlier_rows <- df %>%
-  group_by(vagitype, TargetName) %>%
-  identify_outliers(log2FC) %>%
-  ungroup() %>%
-  filter(is.outlier)
-
-sub_cleaned_no_outliers <- df %>%
-  anti_join(outlier_rows, by = c("labID", "TargetName", "vagitype"))
-
-
-
-####run this sub loop until no outliers
-
-# Identify outliers for each Vagitype x TargetName group
-outlier_rows <- sub_cleaned_no_outliers %>%
-  group_by(vagitype, TargetName) %>%
-  identify_outliers(log2FC) %>%
-  ungroup() %>%
-  filter(is.outlier)
-
-sub_cleaned_no_outliers <- sub_cleaned_no_outliers %>%
-  anti_join(outlier_rows, by = c("labID", "TargetName", "vagitype"))
-
-
-#write.csv(sub_cleaned_no_outliers, "final_QPCR_samples_postNER_postoutlierRemoval.csv")
-
-
-##post outlier removal race mapping
-
-race_df <- read.csv("100120205_qPCR_post_outlierremoval_raceMap.csv", stringsAsFactors = FALSE)
 sub_cleaned_no_outliers <- merge(sub_cleaned_no_outliers, race_df, by = "ParticipantID", all.x = TRUE)
-
 
 
 
@@ -157,24 +113,6 @@ c25 <- c(
 )
 
 
-
-ggplot(df, aes(x = vagitype, y = log2FC, fill = vagitype)) +
-  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.size = 1) +
-  geom_jitter(width = 0.2, size = 1, alpha = 0.5, color = "black") + # optional: show individual points
-  facet_wrap(~ TargetName, scales = "free_y") +
-  scale_fill_manual(values = c25) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  theme_ipsum() +
-  labs(
-    x = "Vagitype",
-    y = "Double DeltaCT",
-    title = "Gene Expression Change per Gene and Vagitypes (All Samples)"
-  ) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-
-
 #sample counts above boxplots
 n_counts <- sub_cleaned_no_outliers %>%
   group_by(TargetName, vagitype) %>%
@@ -226,54 +164,10 @@ p1 <- ggplot(sub_cleaned_no_outliers, aes(x = vagitype, y = log2FC, fill = vagit
 
 
 
-###########race color dots (jitters)
-
-p1 <- ggplot(sub_cleaned_no_outliers, aes(x = vagitype, y = log2FC, fill = vagitype)) +
-  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.size = 1) +
-  # Color dots by race here:
-  geom_jitter(aes(color = X), width = 0.2, size = 3, alpha = 0.6) +
-  facet_wrap(~ TargetName, scales = "free_y") +
-  scale_fill_manual(values = c25) +
-  # Optionally set a custom color palette for Race:
-  # scale_color_manual(values = c("White" = "blue", "Black" = "red", ...))
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_text(
-    data = n_counts,
-    aes(x = vagitype, y = 10, label = paste0("n = ", n)),
-    vjust = 2,
-    size = 5,
-    fontface = "italic"
-  ) +
-  geom_text(
-    data = sig_annot,
-    aes(x = vagitype, y = y, label = label),
-    color = "black",
-    size = 8
-  ) +
-  theme_classic() +
-  theme(
-    legend.position = "right",  # Show legend for Race colors
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    axis.text = element_text(size = 20),
-    axis.title = element_text(size = 30),
-    strip.text = element_text(size = 20, face = "bold")
-  ) +
-  labs(
-    title = "Confirmatory Gene Expression qPCR",
-    color = "Race" # Label for color legend
-  ) +
-  theme(
-    plot.title = ggtext::element_markdown(size = 24, face = "bold")
-  )
-
 print(p1)
 
 
-###################################shapiro test log2fold change
-
-
+#####Shapiro test log2fold change
 set.seed(123)
 for (gene in genes) {
   for (vtype in vagitypes) {
@@ -292,9 +186,7 @@ for (gene in genes) {
 
 
 
-#############check for homogeneity of variance with log2FC
-
-
+#####check for homogeneity of variance of log2FC
 for (gene in genes) {
   subset_df <- subset(sub_cleaned_no_outliers, TargetName == gene)
   valid_df <- subset_df[!is.na(subset_df$log2FC), ]
@@ -310,9 +202,7 @@ for (gene in genes) {
 
 
 
-
-
-############################################################## kruskal test 
+#####Kruskal test 
 
 set.seed(495)
 for (gene in genes){
@@ -322,15 +212,12 @@ for (gene in genes){
   
 }
 
-
 pvals <- c()
 p.adjust(pvals, method = "BH", n = 4)
 
 
 
-############################welch anova
-
-##with log2fold change
+#####Welch anova with log2fold change
 set.seed(495)
 for (gene in genes){
   dat <- subset(sub_cleaned_no_outliers, TargetName == gene)
@@ -339,15 +226,13 @@ for (gene in genes){
   
 }
 
-#pvals <- c(0.145, 0.0000535,0.608,0.002)
+#pvals <- c()
 #p.adjust(pvals, method = "BH", n = 4)
-
-
 oneway.test(log2FC ~ vagitype, data = valid_df, var.equal = FALSE)
 
-#############################3Games howell post hoc
 
 
+#####Games howell post hoc
 set.seed(493)
 for (gene in genes){
   dat <- subset(sub_cleaned_no_outliers, TargetName == gene)
