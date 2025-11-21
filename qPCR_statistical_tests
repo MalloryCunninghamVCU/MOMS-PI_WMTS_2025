@@ -1,1 +1,460 @@
 
+library(readr)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(hrbrthemes)
+library(FSA)
+library(car)
+library(rstatix)
+library(egg)
+
+
+setwd("C:/Users/mallo/OneDrive/Documents/VCU_BSDP/Buck_Lab/Gene expression project/Salmon")
+
+######################################
+X08182025_qPCR1 <- read_delim("08182025_qPCR1.txt", 
+                              delim = "\t", escape_double = FALSE, 
+                              trim_ws = TRUE)
+
+
+
+X08182025_meg_math <- read_delim("08182025 meg math.txt", 
+                                 delim = "\t", escape_double = FALSE, 
+                                 trim_ws = TRUE)
+
+wide <- X08182025_qPCR1
+long <- X08182025_meg_math
+
+wide_long <- wide %>%
+  pivot_longer(
+    cols = ends_with("Log2foldchange"),
+    names_to = "Target Name",
+    values_to = "log2FC"
+  ) %>%
+  mutate(`Target Name` = case_when(
+    `Target Name` == "IL1b Log2foldchange" ~ "IL1b",
+    `Target Name` == "IL8 Log2foldchange" ~ "IL8",
+    `Target Name` == "NCF2Log2foldchange" ~ "NCF2",
+    `Target Name` == "BCL2A1 Log2foldchange" ~ "BCL2A1",
+    TRUE ~ `Target Name`
+  ))
+
+wide_long$log2FC <- as.numeric(wide_long$log2FC)
+long$log2FC <- as.numeric(long$log2FC)
+
+
+combined <- long %>%
+  left_join(wide_long, 
+            by = c("labID", "ParticipantID", "Target Name", "vagitype", "log2FC"))
+
+
+
+
+length(unique(combined$labID))
+length(unique(combined$ParticipantID))
+
+# Count the number of unique labIDs per ParticipantID
+participant_counts <- combined %>%
+  group_by(ParticipantID) %>%
+  summarise(n_labID = n_distinct(labID)) %>%
+  filter(n_labID > 1)
+
+print(participant_counts)
+
+
+ # 1 P22032              2, remove 1574
+#2 P27691              2, remove 0247
+#3 P53335              2, remove 3277
+#4 P95711              2, remove 2129
+
+
+
+remove_labIDs <- c("1574", "0247", "3277", "2129")
+
+
+combined_clean <- combined %>%
+  filter(!labID %in% remove_labIDs)
+
+
+
+participant_counts <- combined_clean %>%
+  group_by(ParticipantID) %>%
+  summarise(n_labID = n_distinct(labID)) %>%
+  filter(n_labID > 1)
+
+print(participant_counts)
+#############################################
+
+
+df = combined_clean
+
+
+df[df == "IL1b"] <- "IL1B"
+df[df == "IL-1B"] <- "IL1B"
+df[df == "IL8"] <- "CXCL8"
+df[df == "IL-8"] <- "CXCL8"
+df[df == 	"Lachnospiraceae BVAB1"] <- "Lachnocurva vaginae"
+
+df$TargetName <- df$`Target Name`
+
+
+ 
+remove_actin <- c("B-actin", "B-ACTIN")
+
+df <- df%>%
+  filter(!TargetName %in% remove_actin)
+
+
+#write.csv(df, "combined_qPCRdat_pre_outlierfilter.csv")
+
+#combined_qPCRdat_pre_outlierfilter <- read_csv("combined_qPCRdat_pre_outlierfilter.csv")
+
+
+
+
+#df <- combined_qPCRdat_pre_outlierfilter
+
+
+
+########################################sub for only useful vagitypes
+
+# Define the Vagitypes you want to keep
+major_vagitypes <- c(
+  "Gardnerella vaginalis",
+  "Lachnocurva vaginae",
+  "Lactobacillus crispatus_cluster",
+  "Lactobacillus iners",
+  "Lactobacillus gasseri_cluster",
+  "No type"
+)
+
+
+vagitypes <- c("Lachnocurva vaginae", "Lactobacillus crispatus_cluster","Lactobacillus gasseri_cluster", "Lactobacillus iners", "No type", "Gardnerella vaginalis")
+genes <- c("IL1B", "CXCL8", "NCF2", "BCL2A1")
+
+
+
+df <- df[df$vagitype %in% major_vagitypes, ]
+#df<- subset(df, ABX_final == "No")
+
+######################run outlier removal until there are no outliers
+
+# Identify outliers for each Vagitype x TargetName group
+outlier_rows <- df %>%
+  group_by(vagitype, TargetName) %>%
+  identify_outliers(log2FC) %>%
+  ungroup() %>%
+  filter(is.outlier)
+
+sub_cleaned_no_outliers <- df %>%
+  anti_join(outlier_rows, by = c("labID", "TargetName", "vagitype"))
+
+
+
+####run this sub loop until no outliers
+
+# Identify outliers for each Vagitype x TargetName group
+outlier_rows <- sub_cleaned_no_outliers %>%
+  group_by(vagitype, TargetName) %>%
+  identify_outliers(log2FC) %>%
+  ungroup() %>%
+  filter(is.outlier)
+
+sub_cleaned_no_outliers <- sub_cleaned_no_outliers %>%
+  anti_join(outlier_rows, by = c("labID", "TargetName", "vagitype"))
+
+
+#write.csv(sub_cleaned_no_outliers, "final_QPCR_samples_postNER_postoutlierRemoval.csv")
+
+
+##post outlier removal race mapping
+
+race_df <- read.csv("100120205_qPCR_post_outlierremoval_raceMap.csv", stringsAsFactors = FALSE)
+sub_cleaned_no_outliers <- merge(sub_cleaned_no_outliers, race_df, by = "ParticipantID", all.x = TRUE)
+
+
+
+
+
+c25 <- c(
+  "Actinomyces neuii" = "beige",
+  "Atopobium vaginae" = "#c49c94",
+  "Fannyhessea vaginae" =  "#c49c94",
+  "Atopobium_vaginae" = "#c49c94",
+  "Bacteroides vulgatus_dorei" = "gray",
+  "Bifidobacterium breve_cluster" = "brown1",
+  "Brevibacterium ravenspurgense" = "gray",
+  "Clostridiaceae_1 OTU17" = "darkgoldenrod1",
+  "Clostridium colicanis"= "darkgoldenrod1",
+  "Corynebacterium aurimucosum_nigricans" = "chartreuse4",
+  "Corynebacterium cluster58" = "chartreuse4",
+  "Corynebacterium thomssenii_sundsvallense" = "chartreuse4",
+  "Finegoldia magna" = "yellow4",
+  "Finegoldia_magna" = "yellow4",
+  "Enterobacteriaceae cluster31" = "lightgreen",
+  "Enterobacteriaceae_cluster31" = "lightgreen",
+  "Gardnerella vaginalis" = "#d62728",
+  "Gardnerella_vaginalis" = "#d62728",
+  "Granulicatella adiacens"  = "azure1",
+  "Gemella morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Gemella_morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Lachnospiraceae BVAB1" = "#ff7f0e",
+  "Lachnospiraceae_BVAB1" = "#ff7f0e",
+  "Lachnocurva vaginae" = "#ff7f0e",
+  "Lactobacillus crispatus_cluster" = "#fff5aa",
+  "Lactobacillus_crispatus_cluster" = "#fff5aa",
+  "Lactobacillus gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus_gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus iners" = "#aec7e8",
+  "Lactobacillus_iners" = "#aec7e8",
+  "Lactobacillus jensenii" = "#ffbb78",
+  "Lactobacillus_jensenii" = "#ffbb78",
+  "Lactobacillus delbrueckii" = "lightpink",
+  "Lactobacillus_delbrueckii" = "lightpink",
+  "Megasphaera OTU70_type1" = "hotpink4",
+  "Megasphaera_OTU70_type1" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Mycoplasma hominis" = "#0ec434",
+  "Mycoplasma girerdii" = "#0ec434",
+  "Mycoplasma_hominis" = "#0ec434",
+  "Mycoplasma_girerdii" = "#0ec434",
+  "No type" = "black",
+  "Prevotella cluster2" = "#17becf",
+  "Prevotella cluster 2" = "#17becf",
+  "Prevotella_cluster2" = "#17becf",
+  "Prevotella amnii" = "cornflowerblue",
+  "Prevotella_amnii" = "cornflowerblue",
+  "Prevotella bivia" = "cornflowerblue",
+  "Prevotella_bivia" = "cornflowerblue",
+  "Prevotella denticola" = "cornflowerblue",
+  "Prevotella_denticola" = "cornflowerblue",
+  "Prevotella oris" = "cornflowerblue",
+  "Prevotella_oris" = "cornflowerblue",
+  "Prevotella OTU44" = "cornflowerblue",
+  "Prevotella_OTU44" = "cornflowerblue",
+  "Rothia aeria/dentocariosa" = "seashell",
+  "TM7 OTU-H1" = "mediumvioletred",
+  "TM7_OTU-H1" = "mediumvioletred",
+  "Sneathia amnii" = "#9467bd",
+  "Sneathia sanguinegens" = "#9467bd",
+  "Sneathia_amnii" = "#9467bd",
+  "Sneathia_sanguinegens" = "#9467bd",
+  "Staphylococcus cluster47" = "#9edae5",
+  "Streptococcus agalactiae" = "tan4",
+  "Streptococcus cluster29" = "cyan",
+  "Streptococcus_cluster29" = "cyan",
+  "Streptococcus cluster 29" = "cyan",
+  "Streptococcus cluster21" = "darkcyan",
+  "Streptococcus mutans" = "darkcyan",
+  "Streptococcus salivarius_thermophilus_vestibularis" = "darkcyan",
+  "NER" = "gray",
+  "NonLactobacillus" = "red",
+  "Lactobacillus" = "#fff5aa",
+  "Lactobacillus_iners" = "#aec7e8",
+  "Other" = "darkgray",
+  "Ureaplasma cluster23" = "darkgreen",
+  "Ureaplasma_cluster23" = "darkgreen"
+)
+
+
+
+ggplot(df, aes(x = vagitype, y = log2FC, fill = vagitype)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.size = 1) +
+  geom_jitter(width = 0.2, size = 1, alpha = 0.5, color = "black") + # optional: show individual points
+  facet_wrap(~ TargetName, scales = "free_y") +
+  scale_fill_manual(values = c25) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_ipsum() +
+  labs(
+    x = "Vagitype",
+    y = "Double DeltaCT",
+    title = "Gene Expression Change per Gene and Vagitypes (All Samples)"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+#sample counts above boxplots
+n_counts <- sub_cleaned_no_outliers %>%
+  group_by(TargetName, vagitype) %>%
+  summarise(n = sum(!is.na(log2FC))) %>%
+  ungroup()
+
+# Example: annotate significant boxplots
+sig_annot <- data.frame(
+  TargetName = c("BCL2A1"),         # facet/column
+  vagitype = c("No type"),  # x axis group
+  y = c( max(sub_cleaned_no_outliers$log2FC, na.rm = TRUE) * 0.95 ), # pick a value near the top
+  label = c("")
+)
+
+
+p1 <- ggplot(sub_cleaned_no_outliers, aes(x = vagitype, y = log2FC, fill = vagitype)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.size = 1) +
+  geom_jitter(width = 0.2, size = 3, alpha = 0.5, color = "black") +
+  facet_wrap(~ TargetName, scales = "free_y") +
+  scale_fill_manual(values = c25) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(
+    data = n_counts,
+    aes(x = vagitype, y = 10, label = paste0("n = ", n)),
+    vjust = 2,
+    size = 5,
+    fontface = "italic"
+  ) +
+  geom_text(
+    data = sig_annot,
+    aes(x = vagitype, y = y, label = label),
+    color = "black",
+    size = 8
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 30),
+    strip.text = element_text(size = 20, face = "bold")  # << add this line
+  ) +
+  labs(title = "Confirmatory Gene Expression qPCR") +
+  theme(
+    plot.title = ggtext::element_markdown(size = 24, face = "bold")
+  )
+
+
+
+###########race color dots (jitters)
+
+p1 <- ggplot(sub_cleaned_no_outliers, aes(x = vagitype, y = log2FC, fill = vagitype)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.size = 1) +
+  # Color dots by race here:
+  geom_jitter(aes(color = X), width = 0.2, size = 3, alpha = 0.6) +
+  facet_wrap(~ TargetName, scales = "free_y") +
+  scale_fill_manual(values = c25) +
+  # Optionally set a custom color palette for Race:
+  # scale_color_manual(values = c("White" = "blue", "Black" = "red", ...))
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(
+    data = n_counts,
+    aes(x = vagitype, y = 10, label = paste0("n = ", n)),
+    vjust = 2,
+    size = 5,
+    fontface = "italic"
+  ) +
+  geom_text(
+    data = sig_annot,
+    aes(x = vagitype, y = y, label = label),
+    color = "black",
+    size = 8
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "right",  # Show legend for Race colors
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 30),
+    strip.text = element_text(size = 20, face = "bold")
+  ) +
+  labs(
+    title = "Confirmatory Gene Expression qPCR",
+    color = "Race" # Label for color legend
+  ) +
+  theme(
+    plot.title = ggtext::element_markdown(size = 24, face = "bold")
+  )
+
+print(p1)
+
+
+###################################shapiro test log2fold change
+
+
+set.seed(123)
+for (gene in genes) {
+  for (vtype in vagitypes) {
+    subset_df <- subset(sub_cleaned_no_outliers, TargetName == gene & vagitype == vtype)
+    valid_vals <- subset_df$log2FC[!is.na(subset_df$log2FC)]
+    
+    if (length(valid_vals) >= 3 && length(valid_vals) <= 5000) {
+      shapiro_result <- shapiro.test(valid_vals)
+      cat(sprintf("Gene: %s, vagitype: %s, p-value: %.4f\n", gene, vtype, shapiro_result$p.value))
+    } else {
+      cat(sprintf("Gene: %s, vagitype: %s, Not enough valid samples for Shapiro-Wilk test\n", gene, vtype))
+    }
+  }
+}
+
+
+
+
+#############check for homogeneity of variance with log2FC
+
+
+for (gene in genes) {
+  subset_df <- subset(sub_cleaned_no_outliers, TargetName == gene)
+  valid_df <- subset_df[!is.na(subset_df$log2FC), ]
+  
+  if (length(unique(valid_df$vagitype)) > 1 && nrow(valid_df) >= 6) {
+    levene_result <- leveneTest(log2FC ~ vagitype, data = valid_df)
+    cat(sprintf("Gene: %s, Levene's p-value: %.4f\n", gene, levene_result$`Pr(>F)`[1]))
+  } else {
+    cat(sprintf("Gene: %s, Not enough groups or samples for Levene's test\n", gene))
+  }
+}
+
+
+
+
+
+
+############################################################## kruskal test 
+
+set.seed(495)
+for (gene in genes){
+  dat <- subset(sub_cleaned_no_outliers, TargetName == gene)
+  print(gene)
+  print(kruskal.test(log2FC ~ vagitype, data = dat))
+  
+}
+
+
+pvals <- c()
+p.adjust(pvals, method = "BH", n = 4)
+
+
+
+############################welch anova
+
+##with log2fold change
+set.seed(495)
+for (gene in genes){
+  dat <- subset(sub_cleaned_no_outliers, TargetName == gene)
+  print(gene)
+  print(welch_anova_test(dat, log2FC ~ vagitype))
+  
+}
+
+#pvals <- c(0.145, 0.0000535,0.608,0.002)
+#p.adjust(pvals, method = "BH", n = 4)
+
+
+oneway.test(log2FC ~ vagitype, data = valid_df, var.equal = FALSE)
+
+#############################3Games howell post hoc
+
+
+set.seed(493)
+for (gene in genes){
+  dat <- subset(sub_cleaned_no_outliers, TargetName == gene)
+  print(gene)
+  print(games_howell_test(dat, log2FC ~ vagitype, conf.level = 0.95, detailed = FALSE))
+}
+
+
