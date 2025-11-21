@@ -3,17 +3,12 @@ Code used to process and analyze all vaginal metatranscriptomic, 16s rRNA vagina
 
 **Requirements**
 
-Fastp(v0.23.4)
-Kraken2(v2.1.3 with k2_pluspf (2023-10-09) and additional in-house reference vaginal microbe genomes)
-MultiQC(v1.17)
-Salmon(v1.10.1)
-
-
-
-R Studio(v4.4.0 or higher)
-attached base packages:
-[1] stats4    stats     graphics  grDevices utils     datasets  methods
-[8] base
+1. Fastp(v0.23.4)
+2. Kraken2(v2.1.3 with k2_pluspf (2023-10-09) and additional in-house reference vaginal microbe genomes)
+3. MultiQC(v1.17)
+4. Salmon(v1.10.1)
+5. R Studio(v4.4.0 or higher)
+....*attached base packages: stats4, stats, ,graphics, grDevices, utils, datasets, methods
 
 other attached packages:
  [1] readr_2.1.5                 rtracklayer_1.66.0
@@ -25,5 +20,4 @@ other attached packages:
 [13] GenomeInfoDb_1.42.1         IRanges_2.40.1
 [15] S4Vectors_0.44.0            BiocGenerics_0.52.0
 [17] tximport_1.34.0
-
 
