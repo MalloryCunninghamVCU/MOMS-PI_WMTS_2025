@@ -10,17 +10,23 @@ Code used to process and analyze all vaginal metatranscriptomic, 16s rRNA vagina
 5. R Studio(v4.4.0 or higher)
 6. R packages
    + attached base packages: stats4, stats, ,graphics, grDevices, utils, datasets, methods
-8. other attached R packages and versions:
-9. + readr_2.1.5
+7. other attached R packages and versions:
+   + readr_2.1.5
    + rtracklayer_1.66.0
    + tibble_3.2.1
    + dplyr_1.1.4
- [5] org.Hs.eg.db_3.20.0         AnnotationDbi_1.68.0
- [7] DESeq2_1.46.0               SummarizedExperiment_1.36.0
- [9] Biobase_2.66.0              MatrixGenerics_1.18.1
-[11] matrixStats_1.5.0           GenomicRanges_1.58.0
-[13] GenomeInfoDb_1.42.1         IRanges_2.40.1
-[15] S4Vectors_0.44.0            BiocGenerics_0.52.0
-[17] tximport_1.34.0
+   + org.Hs.eg.db_3.20.0
+   + AnnotationDbi_1.68.0
+   + DESeq2_1.46.0
+   + SummarizedExperiment_1.36.0
+   + Biobase_2.66.0
+   + MatrixGenerics_1.18.1
+   + matrixStats_1.5.0
+   + GenomicRanges_1.58.0
+   + GenomeInfoDb_1.42.1
+   + IRanges_2.40.1
+   + S4Vectors_0.44.0
+   + BiocGenerics_0.52.0
+   + tximport_1.34.0
 
 
