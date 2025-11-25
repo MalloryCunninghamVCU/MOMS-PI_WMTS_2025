@@ -199,10 +199,9 @@ anno <- as.data.frame(colData(dds)[, c("Med_final","ga_atSampling_weeks","Race",
 rownames(anno) <- colnames(dds)
 topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 40) #select top 40 most variably expressed genes
 mat <- assay(vsd)[topVarGenes, ]
-mat <- mat - rowMeans(mat)
+mat <- mat - rowMeans(mat) #centering data
 rownames(mat) <- gene_symbols[rownames(mat)]
-mat_z <- t(scale(t(mat)))
-df <- as.data.frame(mat_z)
+
 
 #custom colors
 c25 <- c(
@@ -268,7 +267,6 @@ pheatmap(
   clustering_distance_rows = "euclidean",
   clustering_distance_cols = "correlation",
   clustering_method = "ward.D2",
-  scale = "row",
   color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
   cluster_cols = TRUE,
   main = "Top Variable Genes Across All Samples",
@@ -288,7 +286,6 @@ full_heatmap = pheatmap(
   clustering_distance_rows = "euclidean",
   clustering_distance_cols = "correlation",
   clustering_method = "ward.D2",
-  scale = "row", #scale to row sets middle as 0, z score
   fontsize = 10,
   color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
   cluster_cols = FALSE,
