@@ -83,6 +83,8 @@ other attached packages:
 
 
 
+
+
 **Vaginal V1-V3 16s rRNA Microbiome Profiling Requirements** 
 1. R Studio(v4.4.0 or higher)
 2. R packages
@@ -140,6 +142,8 @@ other attached packages:
 
 
 
+
+
 **qPCR statistical tests**  
 
 attached base packages:
@@ -170,9 +174,3 @@ other attached packages:
 [85] dplyr_1.1.4                 reshape2_1.4.4              ggplot2_3.5.2               vegan_2.7-1                
 [89] permute_0.9-8               phyloseq_1.52.0            
 
-
-
-
-
-
-**Cytokine Data Analysis Requirements**
