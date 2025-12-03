@@ -733,7 +733,7 @@ vagitype_contrasts <- c(
   "vagitype_No.type_vs_Lactobacillus.crispatus_cluster"
 )
 
-genes_of_interest <- c("IL1B", "CXCL8", "NCF2", "BCL2A1", "CD59")
+genes_of_interest <- c("IL1B", "CXCL8", "NCF2", "BCL2A1")
 
 vagitype_results <- results_list[grep("^vagitype_", names(results_list))]
 
