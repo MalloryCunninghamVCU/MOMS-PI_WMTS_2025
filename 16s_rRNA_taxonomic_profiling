@@ -9,8 +9,8 @@ library(tibble)
 library(tidyr)
 library(patchwork)
 library(GUniFrac) 
-
-
+library(rstatix)
+library(effsize)
 
 #####Upload files
 otu_table <- read.csv("reads_table.csv", row.names = 1)   # OTUs as rows, samples as columns
@@ -167,6 +167,16 @@ for (metric in metrics) {
 # Summary test results (Kruskal/ Wilcoxon)
 alpha_div_table <- do.call(rbind, test_results)
 
+
+########################effect size
+# Rank-biserial (two groups) via rstatix
+wilcox_effsize(alpha_div_merged, Shannon ~ Factor)
+
+# Cliff's delta via effsize package
+cliff.delta(alpha_div_merged$Shannon, alpha_div_merged$Factor)
+
+
+
 # Pairwise test results
 pairwise_table <- data.frame() # initialize
 
@@ -192,6 +202,17 @@ if(n_groups > 2) {
 # Print results
 print(alpha_div_table)   # overall Kruskal/ Wilcoxon p-values
 print(pairwise_table)    # pairwise Wilcoxon p-values
+
+
+# after building alpha_div_table with columns Metric and P_value
+alpha_div_table$P_adj_BH   <- p.adjust(alpha_div_table$P_value, method = "BH")
+alpha_div_table$P_adj_Holm <- p.adjust(alpha_div_table$P_value, method = "holm")
+
+# optional: star labels on BH-adjusted p-values
+alpha_div_table$Signif_BH <- cut(alpha_div_table$P_adj_BH,
+                                 breaks = c(-Inf, 0.001, 0.01, 0.05, Inf),
+                                 labels = c("***","**","*","ns"))
+print(alpha_div_table)
 
 
 # Boxplots (Shannon, Observed, Evenness)
