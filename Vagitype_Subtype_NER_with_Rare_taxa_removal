@@ -78,7 +78,7 @@ cts_depth <- cts[, all_totals >= 1000, drop=FALSE]
 samples_after_depth <- colnames(cts_depth)
 
 # 3. Filter taxa
-#Have at least 200 reads (depth threshold) In at least 0.1% of samples (prevalence threshold)
+#Have at least 200 reads (depth threshold) In at least 0.1% of samples (prevalence threshold), with at least 100 samples, basically taxa have to be present w/ 200 reads in at least 1 person
 min_samples <- ceiling(0.001 * ncol(cts_depth))
 taxa_to_keep <- rowSums(cts_depth >= 200) >= min_samples
 cts_filtered <- cts_depth[taxa_to_keep, , drop=FALSE]
