@@ -1,0 +1,109 @@
+######### vagitype #######################
+vagitype <- function(reads_table, th = 0.3) {
+
+  reads_table_abundance <- matrix(data = 0, ncol = ncol(reads_table), nrow = nrow(reads_table))
+
+  col_sums <- colSums(reads_table)
+  for (a in 1:ncol(reads_table)) {
+    if(col_sums[a] > 0){
+      reads_table_abundance[,a] <- reads_table[,a] / col_sums[a]
+    } else {
+      reads_table_abundance[,a] <- 0
+    }
+  }
+
+  reads_table_abundance <- as.data.frame(reads_table_abundance)
+  row.names(reads_table_abundance) = row.names(reads_table)
+  colnames(reads_table_abundance) = colnames(reads_table)
+
+  vagitype_1 = matrix(data = NA, ncol = 1, nrow = ncol(reads_table_abundance))
+  colnames(vagitype_1) = 'Vagitype'
+
+  vagitype_2 = matrix(data = NA, ncol = 1, nrow = ncol(reads_table_abundance))
+  colnames(vagitype_2) = 'subtype'
+
+  max_values = numeric(ncol(reads_table_abundance))
+  second_max_values = numeric(ncol(reads_table_abundance))
+
+  for (a in 1:ncol(reads_table_abundance)) {
+    # Check for Not Enough Reads
+    if (col_sums[a] < 1000) {
+      vagitype_1[a, 1] = 'NER'
+      vagitype_2[a, 1] = 'NER'
+      max_values[a] = NA
+      second_max_values[a] = NA
+      next
+    }
+
+    sorted_abundances = sort(reads_table_abundance[,a], decreasing = TRUE)
+    if (sorted_abundances[1] < th) {
+      vagitype_1[a, 1] = 'No type'
+      vagitype_2[a, 1] = 'No type'
+      max_values[a] = sorted_abundances[1]
+      second_max_values[a] = sorted_abundances[2]
+    } else {
+      max_idx = which(reads_table_abundance[,a] == sorted_abundances[1])
+      vagitype_1[a, 1] = row.names(reads_table_abundance)[max_idx][1]
+      max_values[a] = sorted_abundances[1]
+
+      second_max_idx = which(reads_table_abundance[,a] == sorted_abundances[2])
+      vagitype_2[a, 1] = row.names(reads_table_abundance)[second_max_idx][1]
+      second_max_values[a] = sorted_abundances[2]
+    }
+  }
+
+  vagitype_df <- data.frame(
+    Vagitype = vagitype_1,
+    Relative_abundance = max_values,
+    subtype = vagitype_2,
+    Relative_abundance_2 = second_max_values,
+    Total_reads = col_sums,
+    row.names = colnames(reads_table_abundance)
+  )
+  return(vagitype_df)
+}
+
+# 1. Load and save original sample names and total reads
+cts <- read.csv("stirrups_summary_reads_table.csv", check.names=FALSE)
+
+
+rownames(cts) <- cts[,1]
+cts <- cts[,-1]
+cts[] <- lapply(cts, as.numeric)
+all_samples <- colnames(cts)
+all_totals <- colSums(cts)
+
+# 2. Remove low-depth samples for downstream analysis, but keep their total reads for reporting
+cts_depth <- cts[, all_totals >= 1000, drop=FALSE]
+samples_after_depth <- colnames(cts_depth)
+
+# 3. Filter taxa
+#Have at least 200 reads (depth threshold) In at least 0.1% of samples (prevalence threshold)
+min_samples <- ceiling(0.001 * ncol(cts_depth))
+taxa_to_keep <- rowSums(cts_depth >= 200) >= min_samples
+cts_filtered <- cts_depth[taxa_to_keep, , drop=FALSE]
+samples_after_taxa <- colnames(cts_filtered)
+
+# 4. Run vagitype
+output <- vagitype(cts_filtered)
+
+# 5. Identify missing samples
+present_samples <- rownames(output)
+missing_samples <- setdiff(all_samples, present_samples)
+
+# 6. Create NER rows for missing samples, with correct Total_reads where available
+ner_rows <- data.frame(
+  Vagitype = rep("NER", length(missing_samples)),
+  Relative_abundance = rep(NA, length(missing_samples)),
+  subtype = rep("NER", length(missing_samples)),
+  Relative_abundance_2 = rep(NA, length(missing_samples)),
+  Total_reads = all_totals[missing_samples],
+  row.names = missing_samples
+)
+
+# 7. Combine outputs (original output first, then NER rows)
+final_output <- rbind(output, ner_rows)
+final_output <- final_output[all_samples, ]  # order as original
+
+# 8. Write to file
+write.csv(final_output, "vagitype_filtered_16s_new_M16-allRuns_stirrups_summary_97_reads_table.csv_with_NER.csv", row.names=TRUE)
