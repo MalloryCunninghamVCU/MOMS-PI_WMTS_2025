@@ -100,9 +100,9 @@ dds$vagitype <- relevel(dds$vagitype, ref = "Lactobacillus crispatus_cluster")
 
 
 #####Filter out low count genes
-keep <- rowSums(counts(dds) >= 10) >= 2  # Logical vector: TRUE if gene is kept
+keep <- rowSums(counts(dds) >= 10) >= 2  
 dds <- dds[keep, ]
-sum(duplicated(rownames(dds)))           # Should now be 0
+sum(duplicated(rownames(dds)))           
 
 
 #####Run DESeq2
@@ -130,7 +130,4 @@ dds_filtered$vagitype <- droplevels(dds_filtered$vagitype)
 #####Run DESeq2 again
 dds_filtered <- DESeq(dds_filtered)
 vsd <- vst(dds_filtered, blind=FALSE)
-
-saveRDS(vsd, file = "yourFile_vsd.rds")
-saveRDS(dds_filtered, file = "yourFile_dds.rds")
 
