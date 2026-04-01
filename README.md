@@ -6,7 +6,7 @@ Fettweis JM, Serrano MG, Brooks JP, et al. The vaginal microbiome and preterm bi
 Serrano MG, Parikh HI, Brooks JP, et al. Racioethnic diversity in the dynamics of the vaginal microbiome during pregnancy. Nat Med. 2019;25(6):1001-1011. doi:10.1038/s41591-019-0465-8
 
 *Associated Publication*  
-Cunningham, M et al 2026
+Cunningham, M et al 2026 (in preparation)
 
 **Acknowledgements**
 + High Performance Computing resources provided by the High Performance Research Computing (HPRC) core facility at Virginia Commonwealth University (https://hprc.vcu.edu) were used for conducting this research.
