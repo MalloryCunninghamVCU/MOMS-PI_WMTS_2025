@@ -1,0 +1,35 @@
+
+library(xCell2)
+library(readr)
+
+data <- read.csv(.../"txi_TPMscale_forXcell.csv")
+
+###load reference database
+BlueprintEncode.xCell2Ref <- readRDS(".../BlueprintEncode.xCell2Ref.rds")
+
+###run xCell
+xcell2_results <- xCell2::xCell2Analysis(
+  mix = txi,
+  minSharedGenes = 0.5,
+  xcell2object = BlueprintEncode.xCell2Ref
+)
+
+
+out <- as.matrix(xcell2_results)
+
+
+###visualize with heatmap
+heatmap(out, col = hcl.colors(50), 
+        scale = "column")
+
+heatmap.2(
+  out, 
+  col = hcl.colors(10),
+  scale = "column",
+  trace = "none",
+  key = TRUE,
+  key.title = "Color Key",
+  key.xlab = "Scaled Expression",
+  xlab = " ",
+  labCol = NA   # This removes the x-axis labels
+)
