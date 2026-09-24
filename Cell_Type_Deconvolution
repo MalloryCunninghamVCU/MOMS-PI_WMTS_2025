@@ -2,7 +2,7 @@
 library(xCell2)
 library(readr)
 
-data <- read.csv(.../"txi_TPMscale_forXcell.csv")
+txi <- read.csv(.../"txi_TPMscale_forXcell.csv")
 
 ###load reference database
 BlueprintEncode.xCell2Ref <- readRDS(".../BlueprintEncode.xCell2Ref.rds")
