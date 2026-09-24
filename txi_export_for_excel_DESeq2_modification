@@ -1,0 +1,136 @@
+library(tximport)
+library(DESeq2)
+library(org.Hs.eg.db)
+library(dplyr)
+library(tibble)
+library(AnnotationDbi)
+library(tximport) #version 1.34.0
+library(rtracklayer) #version 1.66.0
+library(readr)
+
+###filter the input list of samples you want to include here####
+samples <- read.table(file.path("...."metadata_IDs.txt"), header = FALSE)
+
+###subset metadata for filtered input list
+meta <- read.csv("meta.csv", header=TRUE)
+meta_filtered <- meta[meta$SampleID %in% sample_ids, ]
+
+meta_filtered$ga_atSampling_weeks_scaled <- scale(meta_filtered$ga_atSampling_weeks)
+meta_filtered$age_scaled <- scale(meta_filtered$age)
+meta_filtered$systolic_scaled <- scale(meta_filtered$systolic)
+
+
+
+sub_dirs <- c(
+  list.files("/lustre/home/cunninghamme2/salmon/pop2_salmon_output/pop2_salmon_decoy_output", pattern = "MV1R*", full.na
+mes = TRUE),
+  list.files("/lustre/home/cunninghamme2/salmon/ptb47_salmon_output/ptb47_salmon_decoy_output", pattern = "MV1R*", full.
+names = TRUE)
+)
+keep_samples <- meta_filtered$SampleID
+sub_dir_ids <- basename(sub_dirs)
+matching_sub_dirs <- sub_dirs[sub_dir_ids %in% keep_samples]
+files <- file.path(matching_sub_dirs, "quant.sf")
+names(files) <- basename(matching_sub_dirs)
+
+
+
+# --- Generate tx2gene mapping from GTF ---
+library(rtracklayer)
+gtf_path <- "/lustre/home/cunninghamme2/salmon/salmon_index_w_decoy/Homo_sapiens.GRCh38.102.gtf.gz"
+gtf <- import(gtf_path)
+tx2gene <- unique(as.data.frame(mcols(gtf)[, c("transcript_id", "gene_id")]))
+tx2gene <- tx2gene[complete.cases(tx2gene), ]
+tx2gene$transcript_id <- sub("\\..*", "", tx2gene$transcript_id)
+tx2gene$gene_id <- sub("\\..*", "", tx2gene$gene_id)
+tx2gene$gene_id <- gsub("\\s", "", tx2gene$gene_id)             # Remove whitespace
+tx2gene$transcript_id <- gsub("\\s", "", tx2gene$transcript_id)
+tx2gene$transcript_id <- sub("\\..*", "", tx2gene$transcript_id)
+any(grepl("\\.", tx2gene$gene_id)) # Should be FALSE
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene, ignoreTxVersion = TRUE, txOut=FALSE)
+#txi2 <-  tximport(files, type = "salmon", tx2gene = tx2gene, ignoreTxVersion = TRUE, countsFromAbundance = "lengthScale
+dTPM", txOut=FALSE)
+#txi2_counts <- as.data.frame(txi2$counts)
+#txi2_counts$geneID <- rownames(txi2_counts)
+#write_csv(txi2_counts, "txi_TPMscale_forXcell.csv")
+
+
+meta_filtered <- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+all(colnames(txi$counts) == meta_filtered$SampleID)  # should be TRUE
+ncol(txi$counts)      # Number of samples in counts matrix
+nrow(meta_filtered)  # Number of metadata rows
+meta_filtered<- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+meta_filtered <- meta_filtered[!duplicated(meta_filtered$SampleID), ]
+rownames(meta_filtered) <- meta_filtered$SampleID
+all(colnames(txi$counts) == rownames(meta_filtered))  # should be TRUE
+ncol(txi$counts) == nrow(meta_filtered)               # should be TRUE
+
+
+txi$counts <- txi$counts[, !duplicated(colnames(txi$counts))]
+if (!is.null(txi$abundance)) txi$abundance <- txi$abundance[, !duplicated(colnames(txi$abundance))]
+if (!is.null(txi$length)) txi$length <- txi$length[, !duplicated(colnames(txi$length))]
+
+meta_filtered <- meta_filtered[match(colnames(txi$counts), meta_filtered$SampleID), ]
+rownames(meta_filtered) <- meta_filtered$SampleID
+
+all(colnames(txi$counts) == rownames(meta_filtered))  # should be TRUE
+ncol(txi$counts) == nrow(meta_filtered)               # should be TRUE
+
+
+#################################################################################### DEseq2 Analysis code
+
+# Subset txi abundance to match the final filtered sample set used in dds_filtered
+final_samples <- colnames(dds_filtered)
+
+gene_tpm <- txi$abundance[, final_samples, drop = FALSE]
+
+stopifnot(
+  is.numeric(gene_tpm),
+  !is.null(rownames(gene_tpm)),
+  !is.null(colnames(gene_tpm)),
+  all(is.finite(gene_tpm)),
+  all(gene_tpm >= 0),
+  all(colnames(gene_tpm) == final_samples)
+)
+
+###Save as RDS
+saveRDS(gene_tpm, file = "gene_tpm_for_xCell2.rds")
+
+###convert Ensembl IDs to gene symbols for xCell2
+ens_ids <- sub("\\..*", "", rownames(gene_tpm))
+
+gene_symbols <- mapIds(
+  org.Hs.eg.db,
+  keys = ens_ids,
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+gene_symbols[is.na(gene_symbols)] <- ens_ids[is.na(gene_symbols)]
+
+gene_tpm_df <- as.data.frame(gene_tpm)
+gene_tpm_df$gene_symbol <- gene_symbols
+
+###Aggregate duplicated gene symbols by summing
+gene_tpm_symbol <- gene_tpm_df %>%
+  filter(!is.na(gene_symbol), gene_symbol != "") %>%
+  group_by(gene_symbol) %>%
+  summarise(across(where(is.numeric), sum), .groups = "drop") %>%
+  as.data.frame()
+
+rownames(gene_tpm_symbol) <- gene_tpm_symbol$gene_symbol
+gene_tpm_symbol$gene_symbol <- NULL
+gene_tpm_symbol <- as.matrix(gene_tpm_symbol)
+
+saveRDS(gene_tpm_symbol, file = "gene_tpm_symbol_for_xCell2.rds")
+
+
+###export
+gene_tpm_symbol_export <- as.data.frame(gene_tpm_symbol)
+gene_tpm_symbol_export$gene <- rownames(gene_tpm_symbol_export)
+gene_tpm_symbol_export <- gene_tpm_symbol_export[, c("gene", setdiff(colnames(gene_tpm_symbol_export), "gene"))]
+
+write_csv(gene_tpm_symbol_export, "gene_tpm_symbol_for_xCell2.csv")
+
+
