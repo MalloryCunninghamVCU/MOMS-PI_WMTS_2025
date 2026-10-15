@@ -1,0 +1,872 @@
+
+library(rstatix)
+library(ggformula)
+library(TestsSymmetry)
+library(DescTools)
+library(BSDA)
+library(RColorBrewer)
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(patchwork)
+library(GUniFrac) 
+library(rsvg)
+
+#####need participant ID paired statistical testing
+
+setwd("C:/Users/")
+
+otu_table <- read.csv("reads_table.csv", row.names = 1)   # OTUs as rows, samples as columns
+metadata <- read.csv("metadata_paired.csv", row.names = 1)     # samples as rows
+
+
+metadata <- metadata[rownames(metadata) != "", ]
+otu_table_sub <- otu_table[ , rownames(metadata)]   
+
+
+##setdiff(rownames(metadata), colnames(otu_table))
+#setdiff(colnames(otu_table), rownames(metadata))
+
+
+
+
+# proportional table
+otu_table_prop <- sweep(otu_table_sub, 2, colSums(otu_table_sub), "/")
+
+
+
+
+
+##################################################################################
+otu_for_rare <- t(otu_table_sub)  # samples as rows
+min_depth <- 1000  #########################################set at 10000 usual minimum####################
+n_reps <- 100  # Number of rarefaction rounds
+set.seed(42)   
+
+# Store results
+alpha_list <- vector("list", n_reps)
+
+for (i in seq_len(n_reps)) {
+  otu_rare_list <- Rarefy(otu_for_rare, depth = min_depth)
+  otu_table_rare <- as.data.frame(otu_rare_list$otu.tab.rff)
+  otu_table_rare <- t(otu_table_rare)  # OTUs as rows, samples as columns
+  
+  otu_mat_rare <- as.matrix(otu_table_rare)
+  OTU_rare <- otu_table(otu_mat_rare, taxa_are_rows=TRUE)
+  SAM <- sample_data(metadata)
+  ps_rare <- phyloseq(OTU_rare, SAM)
+  
+  alpha_div <- estimate_richness(ps_rare, measures = c("Shannon", "Observed"))
+  alpha_div$Evenness <- alpha_div$Shannon / log(alpha_div$Observed)
+  alpha_div$SampleID <- rownames(alpha_div)
+  alpha_list[[i]] <- alpha_div[, c("SampleID", "Shannon", "Observed", "Evenness")]
+}
+
+# Combine and average across reps
+alpha_all <- bind_rows(alpha_list)
+
+alpha_div_avg <- alpha_all %>%
+  group_by(SampleID) %>%
+  summarise(
+    Shannon = mean(Shannon, na.rm = TRUE),
+    Observed = mean(Observed, na.rm = TRUE),
+    Evenness = mean(Evenness, na.rm = TRUE)
+  )
+
+alpha_div_avg$SampleID <- gsub("\\.", "-", alpha_div_avg$SampleID)
+
+
+alpha_div_merged <- merge(alpha_div_avg, metadata, by.x = "SampleID", by.y = "row.names")
+
+alpha_div_merged
+
+
+
+
+
+################paired wilcoxon #################################
+#only works w/ exatly two levels of factor variable
+#################################################################
+
+metrics <- c("Shannon", "Observed", "Evenness")
+paired_results <- list()
+
+# figure out the two unique levels of your Factor column -- no hardcoding required!
+factor_levels <- sort(unique(alpha_div_merged$Factor))
+if(length(factor_levels)!=2) stop("Factor variable must have exactly two levels for paired test.")
+
+for (metric in metrics) {
+  dat_metric <- alpha_div_merged[, c("ParticipantID", "Factor", metric)]
+  # reshape wide so that each row has both timepoints for the same participant
+  data_wide <- tidyr::pivot_wider(
+    dat_metric,
+    names_from = Factor,
+    values_from = all_of(metric)
+  )
+  data_wide <- na.omit(data_wide)
+  v1 <- data_wide[[ factor_levels[1] ]]
+  v2 <- data_wide[[ factor_levels[2] ]]
+  
+  test <- wilcox.test(v1, v2, paired=TRUE, exact=FALSE)
+  paired_results[[metric]] <- data.frame(
+    Metric = metric,
+    Test = paste("Paired Wilcoxon:", factor_levels[1], "vs", factor_levels[2]),
+    P_value = test$p.value
+  )
+}
+paired_results_df <- do.call(rbind, paired_results)
+paired_results_df$P_adj_BH <- p.adjust(paired_results_df$P_value, method = "BH")
+paired_results_df$Signif_BH <- cut(paired_results_df$P_adj_BH,
+                                   breaks = c(-Inf, 0.001, 0.01, 0.05, Inf),
+                                   labels = c("***","**","*","ns"))
+
+print(paired_results_df)
+
+
+wilcox_effsize(alpha_div_merged, Shannon ~ Factor, paired = TRUE, id = "ParticipantID")
+
+
+
+###########wilcoxon rank sum test assumptions
+
+gf_histogram(~ Shannon, data = alpha_div_merged) %>%
+  gf_facet_grid(Factor ~ .) + 
+  theme(
+    plot.title = element_text(size = 10)
+  )
+
+
+
+
+grouped_data <- alpha_div_merged %>% group_by(Factor)
+
+
+
+alpha_wide <- reshape(data = alpha_div_merged,
+                      idvar = "ParticipantID",
+                      v.names = c("Shannon", "Evenness", "Observed"),
+                      timevar = "Factor",
+                      direction = "wide"
+                      )
+
+
+factor_col <- "Factor"
+metrics <- c("Shannon", "Evenness", "Observed") # Adapt this if needed
+id_col <- "ParticipantID"
+
+
+# List of metrics present in your data
+metrics <- c("Shannon", "Evenness", "Observed")
+timepoints <- c(unique(alpha_div_merged$Factor)) # Update if different
+
+# Loop through metrics and compute differences
+for(metric in metrics) {
+  diff_col <- paste0(metric, ".diff_", timepoints[2], "_vs_", timepoints[1])
+  val2 <- paste0(metric, ".", timepoints[2])
+  val1 <- paste0(metric, ".", timepoints[1])
+  alpha_wide[[diff_col]] <- alpha_wide[[val2]] - alpha_wide[[val1]]
+}
+
+
+
+
+
+# Identify all columns in alpha_wide that contain ".diff_T88_vs_T3" (adjust suffix if timepoints differ)
+diff_cols <- grep("\\.diff*", colnames(alpha_wide), value = TRUE)
+
+# Run mod.symm.test for each column, store p-values and W
+symmetry_results <- sapply(diff_cols, function(col) {
+  test <- mod.symm.test(na.omit(alpha_wide[[col]]), alternative = "two.sided", method = "wilcox")
+  c(W = unname(test$statistic), p.value = test$p.value)
+})
+
+# Convert results to data frame for easy viewing
+symmetry_results_df <- as.data.frame(t(symmetry_results))
+symmetry_results_df$metric <- gsub("\\.diff*", "", rownames(symmetry_results_df))
+rownames(symmetry_results_df) <- NULL
+
+# Display results
+print(symmetry_results_df)
+
+
+
+
+
+# Run mod.symm.test for each column, store p-values and W
+sign_results <- sapply(diff_cols, function(col) {
+  test <- SIGN.test(na.omit(alpha_wide[[col]]), alternative = "two.sided")
+  c(W = unname(test$statistic), p.value = test$p.value)
+})
+
+sign_results
+
+
+
+
+##########################Beta diversity tests##################################################
+################################################################################################
+otu_table_rare_t <- t(otu_table_rare)
+bray_dist <- vegdist(otu_table_rare_t, method = "bray")
+metadata_ordered <- metadata[rownames(otu_table_rare_t), , drop = FALSE]
+
+#PCoA
+pcoa <- cmdscale(bray_dist, k = 2, eig = TRUE)
+pcoa_df <- as.data.frame(pcoa$points)
+pcoa_df$SampleID <- rownames(pcoa_df)
+pcoa_df <- merge(pcoa_df, metadata_ordered, by.x="SampleID", by.y="row.names")
+
+beta<- ggplot(pcoa_df, aes(x=V1, y=V2, color=Factor, fill=Factor)) +
+  geom_point(size=3, alpha=0.7) +
+  stat_ellipse(level=0.95, geom="polygon", alpha=0.2, show.legend=FALSE) +
+  labs(title="PCoA of Bray-Curtis Distances", x="PCoA1", y="PCoA2") +
+  theme_classic() +
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )
+
+
+#PERMANOVA
+adonis2(bray_dist ~ Factor, data = metadata_ordered)
+print(beta)
+
+
+
+otu_table_prop_t <- t(otu_table_prop)
+
+
+#Bray-Curtis distance on proportions
+bray_dist <- vegdist(otu_table_prop_t, method = "bray")
+
+#PCoA (classical MDS)
+pcoa <- cmdscale(bray_dist, k = 2, eig = TRUE)
+pcoa_df <- as.data.frame(pcoa$points)
+colnames(pcoa_df) <- c("PCoA1", "PCoA2")
+pcoa_df$SampleID <- rownames(pcoa_df)
+
+#Merge with metadata
+pcoa_df <- merge(pcoa_df, metadata_ordered, by.x = "SampleID", by.y = "row.names", all.x = TRUE)
+
+
+beta_plot <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = Factor, fill = Factor)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(level = 0.95, geom = "polygon", alpha = 0.2, aes(fill = Factor), show.legend = FALSE) +
+  labs(title = "PCoA (Bray-Curtis) on proportions", x = "PCoA1", y = "PCoA2") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 14))
+
+print(beta_plot)
+
+
+
+
+
+#PERMANOVA 
+
+set.seed(42)
+perm_res <- adonis2(bray_dist ~ Factor, data = metadata_ordered, permutations = 999,
+                    strata = metadata_ordered$ParticipantID)
+print(perm_res)
+
+
+
+
+# Check homogeneity of dispersion (important assumption for PERMANOVA)
+disp <- betadisper(bray_dist, metadata_ordered$Factor)
+anova_disp <- anova(disp)                 # parametric test
+perm_disp <- permutest(disp, permutations = 999)  # permutation test
+print(anova_disp)
+print(perm_disp)
+
+
+
+
+
+################## alternative to paired wilcoxon w/ more than 2 levels of factor variable###########################
+##pairwise paired wilcoxon signed rank
+
+#pairwise_wilcox_test(formula = as.formula(paste(metric, "~ Factor")),paired = TRUE
+n_groups <- length(unique(metadata$Factor))
+
+metrics <- c("Shannon", "Observed", "Evenness")
+pairwise_table <- data.frame() # initialize
+
+if(n_groups > 2) {
+  for (metric in metrics) {
+    # Pairwise paired Wilcoxon test using rstatix
+    pw <- alpha_div_merged %>%
+      pairwise_wilcox_test(
+        formula = as.formula(paste(metric, "~ Factor")),
+        paired = TRUE,
+        id = "ParticipantID",  # change to your ID column name if needed
+        p.adjust.method = "BH"
+      )
+    if(nrow(pw) > 0){
+      pw$Metric <- metric
+      pw$Test <- "Pairwise Paired Wilcoxon (BH adj)"
+      pw <- pw[, c("Metric", "Test", "group1", "group2", "p", "p.adj", "p.adj.signif")]
+      names(pw) <- c("Metric", "Test", "Group1", "Group2", "P_value", "P_adj_BH", "Signif_BH")
+      pairwise_table <- rbind(pairwise_table, pw)
+    }
+  }
+}
+
+print(pairwise_table)
+
+
+
+
+
+######################################### plots
+
+# Ensure 'Factor' is a factor and set order if needed
+factor_levels <- unique(as.character(alpha_div_merged$Factor))
+alpha_div_merged$Factor <- factor(alpha_div_merged$Factor, levels = factor_levels)
+if ("Factor" %in% colnames(pcoa_df)) {
+  pcoa_df$Factor <- factor(pcoa_df$Factor, levels = factor_levels)
+}
+
+# Set palette (use any palette of suitable length)
+nlev <- length(factor_levels)
+my_colors <- brewer.pal(max(3, min(nlev, 8)), "Set1")          # Up to 8 distinct colors
+if (nlev > 8) my_colors <- colorRampPalette(brewer.pal(8, "Set2"))(nlev)  # Expand if needed
+names(my_colors) <- factor_levels
+
+
+#Manually Set desired facet order
+alpha_div_merged$Factor <- factor(alpha_div_merged$Factor, levels = c("T80", "T1","T3","T4", "T8","T12"))
+
+
+
+
+
+############### Boxplots (Shannon, Observed, Evenness)
+p1 <- ggplot(alpha_div_merged, aes(x=Factor, y=Shannon, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Shannon Diversity", x="Factor", y="Shannon Index") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  ) + scale_fill_manual(values = my_colors) 
+
+
+p2 <- ggplot(alpha_div_merged, aes(x=Factor, y=Observed, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Observed OTUs", x="Factor", y="Number of OTUs") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )  + scale_fill_manual(values = my_colors)
+
+
+p3 <- ggplot(alpha_div_merged, aes(x=Factor, y=Evenness, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  geom_jitter(width=0.1, alpha=0.5) +
+  labs(title="Evenness", x="Factor", y="Evenness") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 20),
+        axis.text.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        plot.title = element_text(size = 20),
+        axis.title.x = element_blank()
+  )  + scale_fill_manual(values = my_colors)
+
+p1 + p2 + p3 + plot_layout(ncol = 3)
+
+
+
+
+###############################stacked bar plot
+# Relative abundance (stacked bar: use proportional data)
+otu_table_prop_t <- t(otu_table_prop)
+
+# Select top N OTUs across all samples for plotting
+N <- 15
+otu_sums <- colSums(otu_table_prop_t)
+top_otus <- names(sort(otu_sums, decreasing=TRUE))[1:N]
+otu_top_df <- cbind(
+  otu_table_prop_t[, top_otus, drop=FALSE],
+  Other = rowSums(otu_table_prop_t[, !(colnames(otu_table_prop_t) %in% top_otus), drop=FALSE])
+)
+otu_top_rel <- as.data.frame(otu_top_df / rowSums(otu_top_df))
+otu_top_rel$SampleID <- rownames(otu_top_rel)
+
+
+melted <- melt(otu_top_rel, id.vars="SampleID", variable.name="OTU", value.name="RelAbund")
+
+
+#rename columns 
+if (!"OTU" %in% colnames(melted)) {
+  if ("variable" %in% colnames(melted)) names(melted)[names(melted) == "variable"] <- "OTU"
+  if ("value"    %in% colnames(melted)) names(melted)[names(melted) == "value"]    <- "RelAbund"
+}
+
+#rebuild merged df
+melted_meta <- merge(melted,
+                     alpha_div_merged[, c("SampleID", "Shannon", "Factor", "Factor2")],
+                     by = "SampleID", all.x = TRUE)
+
+
+
+sample_order_df <- alpha_div_merged[, c("SampleID", "Shannon", "Factor2")]
+#Manually set Factor2 order: Lactobacillus types first, then others alphabetically
+factor2_levels <- unique(sample_order_df$Factor2)
+factor2_levels <- c(
+  "Lactobacillus crispatus_cluster",
+  "Lactobacillus iners",
+  sort(setdiff(factor2_levels, c("Lactobacillus crispatus_cluster", "Lactobacillus iners")))
+)
+sample_order_df$Factor2 <- factor(sample_order_df$Factor2, levels = factor2_levels)
+
+
+#arrange first by Factor2 (with Lactobacillus left), then by diversity (Shannon)
+ordered_samples <- sample_order_df %>%
+  arrange(Factor2, Shannon) %>%
+  pull(SampleID)
+
+# Apply this order to melted_meta
+melted_meta$SampleID <- factor(melted_meta$SampleID, levels = ordered_samples)
+
+# --- Color palette (adjust to your OTUs as needed) ---
+c25 <- c(
+  "Actinomyces neuii" = "beige",
+  "Atopobium vaginae" = "#c49c94",
+  "Fannyhessea vaginae" =  "#c49c94",
+  "Atopobium_vaginae" = "#c49c94",
+  "Atopobium OTU7" = "#c49c94",
+  "Bacteroides vulgatus_dorei" = "gray",
+  "Bifidobacterium breve_cluster" = "brown1",
+  "Brevibacterium ravenspurgense" = "gray",
+  "Clostridiaceae_1 OTU17" = "darkgoldenrod1",
+  "Clostridium colicanis"= "darkgoldenrod1",
+  "Corynebacterium aurimucosum_nigricans" = "darkolivegreen",
+  "Corynebacterium cluster58" = "darkolivegreen",
+  "Corynebacterium thomssenii_sundsvallense" = "darkolivegreen",
+  "Corynebacterium cluster45" = "darkolivegreen",
+  "Corynebacterium simulans_striatum" = "darkolivegreen",
+  "Corynebacterium pyruviciproducens_cluster" = "darkolivegreen",
+  "Dialister micraerophilus" = "darkblue",
+  "Finegoldia magna" = "gold3",
+  "Finegoldia_magna" = "gold3",
+  "Enterobacteriaceae cluster31" = "lightgreen",
+  "Enterobacteriaceae_cluster31" = "lightgreen",
+  "Gardnerella vaginalis" = "#d62728",
+  "Gardnerella spp" = "#d62728",
+  "Gardnerella_vaginalis" = "#d62728",
+  "Granulicatella adiacens"  = "azure1",
+  "Gemella morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Gemella_morbillorum_sanguinis_haemolysans" = "#ED68ED",
+  "Haemophilus cluster6" = "cornsilk3",
+  "Ca. Lachnocurva vaginae" = "#ff7f0e",
+  "Ca Lachnocurva vaginae" = "#ff7f0e",
+  "Lachnospiraceae BVAB1" = "#ff7f0e",
+  "Ca L vaginae" = "#ff7f0e",
+  "Clostridiales OTU22" = "#FFC300",
+  "Clostridiales BVAB2", "#FFC300",
+  "Lactobacillus crispatus_cluster" = "#fff5aa",
+  "Lactobacillus_crispatus_cluster" = "#fff5aa",
+  "Lactobacillus gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus_gasseri_cluster" = "#c5b0d5",
+  "Lactobacillus iners" = "#aec7e8",
+  "Lactobacillus_iners" = "#aec7e8",
+  "Lactobacillus jensenii" = "#ffbb78",
+  "Lactobacillus_jensenii" = "#ffbb78",
+  "Lactobacillus delbrueckii" = "lightpink",
+  "Lactobacillus_delbrueckii" = "lightpink",
+  "Megasphaera OTU70_type1" = "hotpink4",
+  "Megasphaera_OTU70_type1" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Megasphaera OTU70_type2" = "hotpink4",
+  "Mycoplasma hominis" = "seagreen1",
+  "Mycoplasma girerdii" = "springgreen",
+  "Mycoplasma_hominis" = "springgreen",
+  "Mycoplasma_girerdii" = "springgreen",
+  "No type" = "black",
+  "No Type" = "black",
+  "Neisseria flava/mucosa/pharyngis/sicca" = "yellowgreen",
+  "Neisseria flavescens" = "yellowgreen",
+  "Prevotella cluster2" = "#17becf",
+  "Prevotella cluster 2" = "#17becf",
+  "Prevotella_cluster2" = "#17becf",
+  "Prevotella amnii" = "cornflowerblue",
+  "Prevotella_amnii" = "cornflowerblue",
+  "Prevotella bivia" = "cornflowerblue",
+  "Prevotella_bivia" = "cornflowerblue",
+  "Prevotella disiens" = "cornflowerblue",
+  "Prevotella_disiens" = "cornflowerblue",
+  "Prevotella denticola" = "cornflowerblue",
+  "Prevotella_denticola" = "cornflowerblue",
+  "Prevotella oris" = "cornflowerblue",
+  "Prevotella_oris" = "cornflowerblue",
+  "Prevotella cluster50" = "cornflowerblue",
+  "Prevotella OTU44" = "cornflowerblue",
+  "Prevotella_OTU44" = "cornflowerblue",
+  "Prevotella intermedia" = "cornflowerblue",
+  "Porphyromonas pasteri" = "lightslateblue",
+  "Rothia aeria/dentocariosa" = "seashell",
+  "TM7 OTU-H1" = "mediumvioletred",
+  "TM7_OTU-H1" = "mediumvioletred",
+  "Sneathia amnii" = "#9467bd",
+  "Sneathia sanguinegens" = "#C77Cff",
+  "Sneathia_amnii" = "#9467bd",
+  "Sneathia_sanguinegens" = "#C77CFF",
+  "Staphylococcus cluster47" = "#9edae5",
+  "Streptococcus agalactiae" = "tan4",
+  "Streptococcus anginosus" = "#80CDC1",
+  "Streptococcus cluster29" = "cyan",
+  "Streptococcus_cluster29" = "cyan",
+  "Streptococcus cluster 29" = "cyan",
+  "Streptococcus cluster21" = "darkcyan",
+  "Streptococcus mutans" = "darkcyan",
+  "Streptococcus salivarius_thermophilus_vestibularis" = "darkcyan",
+  "NER" = "gray",
+  "Nonoptimal" = "red",
+  "Optimal" = "#fff5aa",
+  "Transitional" = "#aec7e8",
+  "Other" = "darkgray",
+  "Ureaplasma cluster23" = "darkgreen",
+  "Ureaplasma_cluster23" = "darkgreen",
+  "Veillonella montpellierensis" = "magenta"
+  
+)
+
+otu_order <- melted_meta %>%
+  group_by(OTU) %>%
+  summarise(mean_abund = mean(RelAbund, na.rm=TRUE)) %>%
+  arrange(desc(mean_abund)) %>%
+  pull(OTU)
+
+melted_meta$OTU <- factor(melted_meta$OTU, levels = otu_order)
+
+# Set desired facet order (Enroll first, then Day91)
+metadata_ordered$Factor <- factor(metadata_ordered$Factor, levels = c("T0","T1","T3","T4","T8","T12"))
+
+
+
+
+
+## 1) Count samples per facet (change to n_distinct(SubjectID) etc if needed)
+n_df <- melted_meta %>%
+  distinct(Factor, SampleID) %>%   # ensures one row per sample per facet
+  count(Factor, name = "n")
+
+## 2) Named vector: Factor -> "Factor (n = ...)"
+facet_labs <- setNames(
+  paste0(n_df$Factor, " (n = ", n_df$n, ")"),
+  n_df$Factor
+)
+
+## 3) Use labeller in facet_*()
+p_bar_wrap_n <- ggplot(melted_meta, aes(x = SampleID, y = RelAbund, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(
+    ~ Factor, ncol = 3, scales = "free_x",
+    labeller = as_labeller(facet_labs)
+  ) +
+  labs(
+    title = "Compositional Relative Abundance by Vagitype",
+    y = "Percent Relative abundance",
+    fill = "Top 15 OTUs"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 30),
+    axis.title.x = element_blank(),
+    strip.text = element_text(size = 20),
+    plot.subtitle = element_text(size = 30),
+    legend.text = element_text(size = 25),
+    legend.key.size = grid::unit(6, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) +
+  guides(fill = guide_legend(nrow = 4, byrow = TRUE)) +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+p_bar_wrap_n
+
+
+
+p_ids <- ggplot(melted_meta, aes(x = SampleID, y = RelAbund, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(
+    ~ Factor, ncol = 4, scales = "free_x",
+    labeller = as_labeller(facet_labs)
+  ) +
+  labs(
+    title = "Compositional Relative Abundance by Vagitype",
+    y = "Percent Relative abundance",
+    fill = "Top 15 OTUs"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(size = 5, angle = 45),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_blank(),
+    strip.text = element_text(size = 5),
+    plot.subtitle = element_text(size = 10),
+    legend.text = element_text(size = 5),
+    legend.key.size = grid::unit(6, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) +
+  guides(fill = guide_legend(nrow = 4, byrow = TRUE)) +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+
+p_ids
+
+
+
+p1 <- ggplot(alpha_div_merged, aes(x=Factor, y=Shannon, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7, linewidth = 0.15) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA, linewidth = 0.2) +
+  geom_jitter(width=0.1, alpha=0.5, size = 0.1) +
+  labs(title="Shannon Diversity", x="Factor", y="Shannon Index") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = 8),
+        plot.title = element_blank(),
+        axis.title.x = element_blank(), 
+        panel.border = element_rect(linewidth = 0.15),
+        axis.line = element_blank()
+  )+ scale_fill_manual(values = my_colors) 
+
+print(p1)
+
+p2 <- ggplot(alpha_div_merged, aes(x=Factor, y=Observed, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7, linewidth = 0.15) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA,linewidth = 0.2) +
+  geom_jitter(width=0.1, alpha=0.5, size = 0.1) +
+  labs(title="Observed OTUs", x="Factor", y="Number of OTUs") +
+  theme_classic() + 
+  theme(legend.position="none",
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = 8),
+        plot.title = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(linewidth = 0.15),
+        axis.line = element_blank()
+  )+ scale_fill_manual(values = my_colors) 
+
+p3 <- ggplot(alpha_div_merged, aes(x=Factor, y=Evenness, fill=Factor)) +
+  geom_violin(trim=FALSE, alpha=0.7, linewidth = 0.15) +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA,linewidth = 0.2) +
+  geom_jitter(width=0.1, alpha=0.5, size = 0.1) +
+  labs(title="Evenness", x="Factor", y="Evenness") +
+  theme_classic() + 
+  theme(
+    axis.text.y = element_text(size = 6),
+    axis.text.x = element_blank(),
+    axis.title.y = element_text(size = 8),
+    plot.title = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "bottom",
+    legend.key.size = unit(2, "mm"),
+    panel.border = element_rect(linewidth = 0.15),
+    axis.line = element_blank()
+  )+ scale_fill_manual(values = my_colors) 
+
+
+
+
+
+
+## 1) Count samples per facet (change to n_distinct(SubjectID) etc if needed)
+n_df <- melted_meta %>%
+  distinct(Factor, SampleID) %>%   # ensures one row per sample per facet
+  count(Factor, name = "n")
+
+## 2) Named vector: Factor -> "Factor (n = ...)"
+facet_labs <- setNames(
+  paste0(n_df$Factor, " (n = ", n_df$n, ")"),
+  n_df$Factor
+)
+
+## 3) Use labeller in facet_*()
+p_bar_wrap_n <- ggplot(melted_meta, aes(x = SampleID, y = RelAbund, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(
+    ~ Factor, ncol = 4, scales = "free_x",
+    labeller = as_labeller(facet_labs)
+  ) +
+  labs(
+    title = "Compositional Relative Abundance by Vagitype",
+    y = "Percent Relative abundance",
+    fill = "Top 15 OTUs"
+  ) +
+  theme_classic()  +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+p_bar_wrap_n
+
+
+
+#stacked bar
+p_bar <- p_bar_wrap_n +
+  labs(
+    title = "Relative Abundance by Factor",
+    y = "Percent Relative abundance"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 4),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 8),
+    strip.text = element_text(size = 6),      # Facet labels
+    plot.title = element_blank(),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 8),
+    legend.position = "bottom",
+    axis.ticks.x = element_blank(),
+    legend.key.size = unit(2, "mm"),
+    legend.spacing.x = unit(0.01, "mm"),
+    legend.key.spacing.y = unit(0.01, "mm"),
+    axis.line = element_blank(),
+    strip.background = element_rect(size = 0.15) ,
+    panel.border = element_rect(linewidth = 0.15)
+  ) +
+  scale_fill_manual(values = c25, na.value = "gray80")
+
+print(p_bar)
+
+
+
+
+
+otu_table_rare_t <- t(otu_table_rare)
+bray_dist <- vegdist(otu_table_rare_t, method = "bray")
+metadata_ordered <- metadata[rownames(otu_table_rare_t), , drop = FALSE]
+
+# PCoA
+pcoa <- cmdscale(bray_dist, k = 2, eig = TRUE)
+pcoa_df <- as.data.frame(pcoa$points)
+pcoa_df$SampleID <- rownames(pcoa_df)
+pcoa_df <- merge(pcoa_df, metadata_ordered, by.x="SampleID", by.y="row.names")
+
+beta<- ggplot(pcoa_df, aes(x=V1, y=V2, color=Factor, fill=Factor)) +
+  geom_point(size=0.5, alpha=0.7) +
+  stat_ellipse(level=0.95, geom="polygon", alpha=0.05, show.legend=FALSE) +
+  labs(title="PCoA of Bray-Curtis Distances", x="PCoA1", y="PCoA2") +
+  theme_classic() +
+  theme(
+    axis.text.y = element_text(size = 6),
+    axis.text.x = element_text(size = 6),
+    axis.title.y = element_text(size = 8),
+    plot.title = element_text(size = 7),
+    axis.title.x = element_blank(),
+    legend.position = "none",
+    axis.line = element_blank(),
+    panel.border = element_rect(linewidth = 0.15)
+  ) + scale_color_manual(values = my_colors) +
+  scale_fill_manual(values = my_colors) 
+
+print(beta)
+
+
+
+
+
+
+
+
+############################################################################
+#### alluvial plots
+###########################################################################
+library(ggplot2)
+library(readr)
+library(ggalluvial)
+library(gridExtra)
+library(tidyr)
+library(lubridate)
+library(dplyr)
+
+
+##read data
+###Vagitype_value has to be 1 so all points can be plotted w/ numeric
+
+
+dat<- read.csv(".._foralluvial.csv")
+
+
+dat$Timepoint <- factor(dat$Timepoint, levels = c("T88", "T1", "T3", "T4", "T8", "T12"))
+dat <- na.omit(dat)
+
+
+#rownames(dat) <- dat$SampleID
+#dat$SampleID <- paste0("Sample_", dat$SampleID)
+#rownames(dat) <- dat$SampleID
+
+df1 = 
+df2 = dat
+df3 = 
+df4 = 
+
+list_of_dfs = list(df2)
+vagitype_plots <- list()
+subtype_plots <- list()
+
+length <- length(unique(dat$PTID))
+
+
+for (i in seq_along(list_of_dfs)) {
+  df_input <- list_of_dfs[[i]]
+
+
+df <- data.frame(
+  SampleID = df_input$SampleID,
+  Timepoint = df_input$Timepoint,
+  PTID = df_input$PTID,
+  Vagitype = df_input$Vagitype_Group,
+  Vagitype_Value = df_input$Vagitype_Value
+)
+
+}
+plot_titles <- c("")
+
+vagitype_plot <- ggplot(df,
+                        aes(x = Timepoint, stratum = Vagitype, alluvium = PTID,
+                            y = Vagitype_Value, fill = Vagitype)) +
+  geom_flow(stat = "alluvium", lode.guidance = "rightleft", color = "darkgray") +
+  geom_stratum(alpha = 0.8) +
+  scale_fill_manual(values = c25) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 10),
+    axis.text.x = element_text(size = 10)
+  ) +
+  labs(y = "Counts",
+       title = paste("Vagitype Transitions Over Time n = ", length),
+       fill = "Vagitype")
+
+
+vagitype_plot
