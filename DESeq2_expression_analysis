@@ -711,3 +711,184 @@ print(samp_dists)
 
 
 
+
+
+
+
+##############Likelihood Ratio Test and Model Fit validation
+out_dir <- "deseq2_contrast_outputs/lrt_single_drop"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+run_lrt_drop_save <- function(dds, reduced_formula, label, out_dir,
+                              save_dds = TRUE, save_rds_results = TRUE) {
+  message("Running LRT drop: ", label)
+  
+  d <- DESeq(dds, test = "LRT", reduced = reduced_formula)
+  
+  # DESeq2 results
+  r <- results(d, independentFiltering = FALSE)
+  r_df <- as.data.frame(r)
+  r_df$gene_id <- rownames(r_df)
+  
+
+  r_df <- r_df[, c("gene_id", setdiff(colnames(r_df), "gene_id"))]
+  
+  # Save tabular results
+  write.csv(r_df,
+            file.path(out_dir, paste0("LRT_drop_", label, "_results.csv")),
+            row.names = FALSE)
+  
+  # Save RDS of results table
+  if (save_rds_results) {
+    saveRDS(r_df, file.path(out_dir, paste0("LRT_drop_", label, "_results.rds")))
+  }
+  
+  # Save fitted DESeqDataSet
+  if (save_dds) {
+    saveRDS(d, file.path(out_dir, paste0("LRT_drop_", label, "_dds.rds")))
+  }
+  
+  invisible(list(dds = d, res = r, res_df = r_df))
+}
+
+
+res_drop_Med <- run_lrt_drop_save(
+  dds,
+  ~ systolic_scaled + age_scaled + ga_atSampling_weeks_scaled +
+    Race + IncomeModified + HPV_stat + vagitype,
+  "Med_final", out_dir
+)
+
+res_drop_Systolic <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + age_scaled + ga_atSampling_weeks_scaled +
+    Race + IncomeModified + HPV_stat + vagitype,
+  "systolic_scaled", out_dir
+)
+
+res_drop_Age <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + ga_atSampling_weeks_scaled +
+    Race + IncomeModified + HPV_stat + vagitype,
+  "age_scaled", out_dir
+)
+
+res_drop_GA <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + age_scaled +
+    Race + IncomeModified + HPV_stat + vagitype,
+  "ga_atSampling_weeks_scaled", out_dir
+)
+
+res_drop_Race <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled +
+    IncomeModified + HPV_stat + vagitype,
+  "Race", out_dir
+)
+
+res_drop_Income <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled +
+    Race + HPV_stat + vagitype,
+  "IncomeModified", out_dir
+)
+
+res_drop_HPV <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled +
+    Race + IncomeModified + vagitype,
+  "HPV_stat", out_dir
+)
+
+res_drop_vagitype <- run_lrt_drop_save(
+  dds,
+  ~ Med_final + systolic_scaled + age_scaled + ga_atSampling_weeks_scaled +
+    Race + IncomeModified + HPV_stat,
+  "vagitype", out_dir
+)
+
+
+
+
+
+
+
+###############Log2fc shrink
+coefs <- setdiff(resultsNames(dds), "Intercept")
+
+# Shrink every coefficient and keep the results in a named list
+res_shr <- lapply(coefs, function(cf) {
+  lfcShrink(dds, coef = cf, type = "ashr")
+})
+names(res_shr) <- coefs
+
+#one page per coefficient
+dir.create("ma_plots", showWarnings = FALSE)
+pdf(".../ma_plots/MA_all_coefficients.pdf", width = 7, height = 5)
+for (cf in coefs) {
+  n_sig <- sum(res_shr[[cf]]$padj < 0.05, na.rm = TRUE)
+  DESeq2::plotMA(res_shr[[cf]], ylim = c(-3, 3),
+                 main = paste0(cf, "  (padj<0.05: ", n_sig, ")"))
+  abline(h = 0, col = "red")
+}
+dev.off()
+
+#Individual PNGs
+for (cf in coefs) {
+  png(file.path("ma_plots", paste0("MA_", cf, ".png")),
+      width = 1800, height = 1400, res = 300)
+  DESeq2::plotMA(res_shr[[cf]], ylim = c(-3, 3), main = cf)
+  abline(h = 0, col = "red")
+  dev.off()
+}
+
+op <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (cf in coefs) {
+  DESeq2::plotMA(res_shr[[cf]], ylim = c(-3, 3), main = cf, cex.main = 0.6)
+  abline(h = 0, col = "red")
+}
+par(op)
+
+#Save
+saveRDS(res_shr, ".../ma_plots/res_shrunk_all_coefs.rds")
+
+#summary table
+data.frame(
+  coef = coefs,
+  n_sig_005 = sapply(res_shr, function(r) sum(r$padj < 0.05, na.rm = TRUE)),
+  n_up      = sapply(res_shr, function(r) sum(r$padj < 0.05 & r$log2FoldChange > 0, na.rm = TRUE)),
+  n_down    = sapply(res_shr, function(r) sum(r$padj < 0.05 & r$log2FoldChange < 0, na.rm = TRUE))
+)
+
+
+#Unshrunken and shrunken results for every coefficient
+res_raw <- lapply(coefs, function(cf) results(dds, name = cf))
+res_shr <- lapply(coefs, function(cf) lfcShrink(dds, coef = cf, type = "ashr"))
+names(res_raw) <- names(res_shr) <- coefs
+
+ylim_use <- c(-3, 3)
+
+dir.create("ma_plots", showWarnings = FALSE)
+
+#left = unshrunken, right = shrunken
+pdf(".../ma_plots/MA_raw_vs_shrunk.pdf", width = 11, height = 5)
+for (cf in coefs) {
+  op <- par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1), oma = c(0, 0, 2, 0))
+  
+  n_raw <- sum(res_raw[[cf]]$padj < 0.05, na.rm = TRUE)
+  n_shr <- sum(res_shr[[cf]]$padj < 0.05, na.rm = TRUE)
+  
+  DESeq2::plotMA(res_raw[[cf]], ylim = ylim_use,
+                 main = paste0("Unshrunken (padj<0.05: ", n_raw, ")"))
+  abline(h = 0, col = "red")
+  
+  DESeq2::plotMA(res_shr[[cf]], ylim = ylim_use,
+                 main = paste0("Shrunken, ashr (padj<0.05: ", n_shr, ")"))
+  abline(h = 0, col = "red")
+  
+  mtext(cf, outer = TRUE, cex = 1.1, font = 2)
+  par(op)
+}
+dev.off()
+
