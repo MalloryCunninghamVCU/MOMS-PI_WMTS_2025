@@ -6,7 +6,7 @@ Fettweis JM, Serrano MG, Brooks JP, et al. The vaginal microbiome and preterm bi
 Serrano MG, Parikh HI, Brooks JP, et al. Racioethnic diversity in the dynamics of the vaginal microbiome during pregnancy. Nat Med. 2019;25(6):1001-1011. doi:10.1038/s41591-019-0465-8
 
 *Associated Publication*  
-Cunningham, M et al 2026 (in preparation)
+Cunningham ME, Williams MT, Spaine KM, Marcinkowska A, Matveyev AV, Hur BJ, Natterer HO, Chatterjee RB, Oldfield CJ, Edupuganti L, Zhu B, Jefferson KK, Strauss JF 3rd, Olex AL, Serrano MG, Buck GA. Differential Host Gene Expression Associated with Non-Lactobacillus-dominant Vaginal Microbiomes During Pregnancy. Res Sq [Preprint]. 2026 May 25:rs.3.rs-9268667. doi: 10.21203/rs.3.rs-9268667/v1. PMID: 42245806; PMCID: PMC13232444.
 
 **Acknowledgements**
 + High Performance Computing resources provided by the High Performance Research Computing (HPRC) core facility at Virginia Commonwealth University (https://hprc.vcu.edu) were used for conducting this research.
